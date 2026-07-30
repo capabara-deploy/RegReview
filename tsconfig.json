@@ -1,0 +1,11 @@
+{
+  "files": [],
+  // packages/eval joins this list when Phase 2 writes its fixtures; tsc errors
+  // on a project whose `include` matches no files. apps/web is not a composite
+  // project (Vite owns its build), so it is typechecked by its own `tsc -b`.
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/corpus" },
+    { "path": "./apps/server" }
+  ]
+}

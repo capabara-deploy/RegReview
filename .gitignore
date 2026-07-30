@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local secrets — never commit
+.env
+.env.local
+
+# Customer documents and derived data never enter version control.
+# Design and quality records are among the most confidential documents a
+# device company owns; a stray commit is a disclosure.
+data/
+uploads/
+corpus-cache/
+!corpus-cache/.gitkeep
+
+# OS noise
+.DS_Store
+Thumbs.db

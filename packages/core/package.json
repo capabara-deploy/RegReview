@@ -1,0 +1,25 @@
+{
+  "name": "@regreview/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./db": "./dist/db/index.js",
+    "./types": "./dist/types.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "better-sqlite3": "^13.0.2",
+    "mammoth": "^1.9.0",
+    "pdfjs-dist": "^4.9.155",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "regreview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI pre-inspection review for FDA-regulated design and quality records",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b",
+    "//": "Workspaces import @regreview/core via its dist output, so core is built first. tsc -b is incremental, so this is a no-op once warm.",
+    "build:core": "tsc -b packages/core",
+    "//review": "Run from the repo root so --env-file-if-exists finds ./.env and the CLI's relative imports resolve. --env-file-if-exists (not --env-file) so a missing .env is not an error.",
+    "review": "node --env-file-if-exists=.env --import tsx packages/core/src/cli/review.ts",
+    "migrate": "npm run -w @regreview/core migrate",
+    "ingest:observations": "npm run build:core && npm run -w @regreview/corpus ingest:observations",
+    "ingest:cfr": "npm run build:core && npm run -w @regreview/corpus ingest:cfr",
+    "ingest:guidance": "npm run build:core && npm run -w @regreview/corpus ingest:guidance",
+    "ingest:rules": "npm run build:core && npm run -w @regreview/corpus ingest:rules",
+    "corpus:report": "npm run build:core && npm run -w @regreview/corpus report",
+    "severity:check": "npm run build:core && npm run -w @regreview/corpus severity:check",
+    "eval": "npm run build:core && npm run -w @regreview/eval eval",
+    "dev:server": "npm run build:core && npm run -w @regreview/server dev",
+    "dev:web": "npm run -w @regreview/web dev",
+    "diff:runs": "npm run build:core && npm run -w @regreview/corpus diff:runs",
+    "sop": "node --env-file-if-exists=.env --import tsx packages/core/src/cli/ingestSop.ts",
+    "rules:report": "npm run build:core && npm run -w @regreview/corpus rules:report"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

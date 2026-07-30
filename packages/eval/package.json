@@ -1,0 +1,19 @@
+{
+  "name": "@regreview/eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "eval": "tsx src/cli/runEval.ts",
+    "fixtures:formats": "tsx src/cli/makeFormatFixtures.ts",
+    "check:formats": "tsx src/cli/checkFormats.ts"
+  },
+  "dependencies": {
+    "@regreview/core": "*"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.2",
+    "pdf-lib": "^1.17.1"
+  }
+}

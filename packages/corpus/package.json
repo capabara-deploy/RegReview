@@ -1,0 +1,24 @@
+{
+  "name": "@regreview/corpus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "ingest:observations": "tsx src/cli/ingestObservations.ts",
+    "ingest:cfr": "tsx src/cli/ingestCfr.ts",
+    "ingest:guidance": "tsx src/cli/ingestGuidance.ts",
+    "ingest:rules": "tsx src/cli/ingestAuthoredRules.ts",
+    "report": "tsx src/cli/report.ts",
+    "severity:check": "tsx src/cli/severityCheck.ts",
+    "diff:runs": "tsx src/cli/diffRuns.ts",
+    "rules:report": "tsx src/cli/rulesReport.ts",
+    "facts:report": "tsx src/cli/factsReport.ts"
+  },
+  "dependencies": {
+    "@regreview/core": "*",
+    "fast-xml-parser": "^5.10.1",
+    "fflate": "^0.8.2",
+    "pdfjs-dist": "^4.9.155"
+  }
+}
