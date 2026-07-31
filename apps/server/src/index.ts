@@ -51,6 +51,35 @@ await app.register(multipart, {
 
 migrate();
 
+/**
+ * Reconcile runs left mid-flight by a previous process.
+ *
+ * A run row is written when a review starts and updated when it ends, so a
+ * process that dies in between leaves it stuck at 'running' forever. Nothing
+ * else ever reconciles it: the job that owned it lived in memory and died with
+ * the process, and the reviewer UI skips non-complete runs when choosing which
+ * one to show — so the work looks simply lost rather than failed.
+ *
+ * Anything still 'running' at startup cannot be in flight, because the only
+ * process that could be advancing it is the one that just booted.
+ */
+{
+  const db = getDb();
+  const stranded = db
+    .prepare(`SELECT run_id FROM runs WHERE status = 'running'`)
+    .all() as { run_id: string }[];
+  if (stranded.length > 0) {
+    db.prepare(
+      `UPDATE runs SET status = 'failed', finished_at = ?,
+         error = 'interrupted: the server process ended before this review finished'
+       WHERE status = 'running'`,
+    ).run(new Date().toISOString());
+    console.warn(
+      `Marked ${stranded.length} interrupted run(s) as failed (left 'running' by a previous process).`,
+    );
+  }
+}
+
 const uploadDir = join(config.uploadDir);
 mkdirSync(uploadDir, { recursive: true });
 
@@ -74,6 +103,7 @@ interface RunRow {
   started_at: string;
   finished_at: string | null;
   status: string;
+  error: string | null;
 }
 
 interface BlockRow {
@@ -157,6 +187,9 @@ app.get("/api/records/:recordId", (request, reply) => {
       startedAt: r.started_at,
       finishedAt: r.finished_at,
       status: r.status,
+      // Surfaced so a failed run can say why. Without it a review that died
+      // renders exactly like a document with nothing wrong in it.
+      error: r.error,
     })),
   };
 });
@@ -617,6 +650,7 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
     results: [slot],
   };
   jobs.set(job.jobId, job);
+  pruneJobs();
 
   // Fire and forget; the client polls GET /api/jobs/:id.
   void (async () => {
@@ -737,6 +771,7 @@ app.post("/api/reviews/batch", async (request, reply) => {
     })),
   };
   jobs.set(job.jobId, job);
+  pruneJobs();
 
   void (async () => {
     let totalFindings = 0;
@@ -798,6 +833,36 @@ app.get("/api/jobs/:jobId", (request, reply) => {
   if (!job) return reply.code(404).send({ error: "job not found" });
   return job;
 });
+
+/**
+ * Every job this process knows about, newest first.
+ *
+ * The browser holds job ids in memory, so a reload used to orphan a review that
+ * was still running: the work continued here and finished, but the page had no
+ * id left to poll and showed nothing. Listing them lets a fresh page re-attach
+ * to whatever is in flight — which also means a second tab, or a different
+ * browser, sees the same running reviews.
+ *
+ * Jobs are progress for a long-running request, not durable state. They die with
+ * the process; the durable result is the run and its findings in the database.
+ */
+app.get("/api/jobs", () =>
+  [...jobs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+);
+
+/**
+ * Keep the job map from growing without bound over a long-lived server. Running
+ * jobs are never evicted — only finished ones, oldest first.
+ */
+const MAX_REMEMBERED_JOBS = 50;
+function pruneJobs(): void {
+  const finished = [...jobs.values()]
+    .filter((j) => j.status !== "running")
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  for (const j of finished.slice(0, Math.max(0, jobs.size - MAX_REMEMBERED_JOBS))) {
+    jobs.delete(j.jobId);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Managing the customer's procedures (SOPs)

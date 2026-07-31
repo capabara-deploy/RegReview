@@ -650,6 +650,11 @@ body {
   }
 }
 
+.run-failed {
+  margin: 0;
+  border-radius: 0;
+}
+
 .findings-bar {
   display: flex;
   align-items: center;

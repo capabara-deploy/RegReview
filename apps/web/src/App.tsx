@@ -70,6 +70,33 @@ export function App() {
     void refreshRecords();
   }, [refreshRecords]);
 
+  /**
+   * Re-attach to the server's reviews on load.
+   *
+   * Job ids lived only in this component's state, so a reload orphaned them: a
+   * running review carried on server-side and finished, but the page had no id
+   * left to poll and showed nothing — which reads as the work having been lost.
+   *
+   * Finished jobs are adopted too, not just running ones. A review that completed
+   * while the page was away is exactly the case where the user wants to see what
+   * it found, and dropping it would leave them to hunt for the run by hand. The
+   * server keeps a bounded number of recent jobs; only running ones are polled.
+   */
+  useEffect(() => {
+    void (async () => {
+      try {
+        const existing = await api.jobs();
+        if (existing.length === 0) return;
+        for (const j of existing) {
+          if (j.status === "running") watched.current.add(j.jobId);
+        }
+        setJobs(existing);
+      } catch {
+        // A server that cannot list jobs is not a reason to block the page.
+      }
+    })();
+  }, []);
+
   const selectRun = useCallback(async (id: string) => {
     setError(null);
     setRunId(id);

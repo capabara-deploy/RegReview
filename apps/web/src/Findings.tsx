@@ -104,6 +104,7 @@ export function Findings({
           >
             {record.runs.map((r) => (
               <option key={r.runId} value={r.runId}>
+                {r.status === "complete" ? "" : r.status === "failed" ? "⚠ " : "… "}
                 {new Date(r.startedAt).toLocaleString()} · {r.model} · {r.status}
                 {r.model.startsWith("keyword-") ? " (baseline)" : ""}
               </option>
@@ -111,6 +112,17 @@ export function Findings({
           </select>
         )}
       </div>
+
+      {/* A run that failed must say so. Otherwise it renders as a document with
+          an empty finding list, which is indistinguishable from a clean one —
+          the most dangerous output this tool can produce. */}
+      {currentRun && currentRun.status !== "complete" && (
+        <div className="error run-failed">
+          <strong>This run {currentRun.status === "running" ? "is unfinished" : "failed"}.</strong>{" "}
+          {currentRun.error ?? "No findings were produced."} Pick another run above, or start a
+          new review.
+        </div>
+      )}
 
       {/* Every run is stamped with the model, prompt version and corpus version.
           Two findings are only comparable if these match, so they are shown

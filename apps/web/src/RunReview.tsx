@@ -105,10 +105,31 @@ export function RunReview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records.length]);
 
-  const pickedRecords = records.filter((r) => picked.has(r.recordId));
+  /**
+   * A stable, alphabetical order — deliberately not the server's.
+   *
+   * `/api/records` returns most-recently-reviewed first, which re-sorts every
+   * time a review finishes. This list is polled while reviews run, so rows moved
+   * under the user's cursor: with a native type dropdown open, the row beneath it
+   * could become a different document between opening the menu and choosing an
+   * option, and the change would be applied to whatever record had moved into
+   * that position. That is how a risk management file silently became a CAPA.
+   *
+   * A control the user selects from must not reorder itself while they are using
+   * it, so the ordering here is a pure function of the document's name.
+   */
+  const ordered = useMemo(
+    () =>
+      [...records].sort((a, b) =>
+        (a.docId ?? a.filename).localeCompare(b.docId ?? b.filename),
+      ),
+    [records],
+  );
+
+  const pickedRecords = ordered.filter((r) => picked.has(r.recordId));
   // Only documents not already under review can be cross-check targets: a record
   // compared against itself agrees with itself on everything.
-  const unpicked = records.filter((r) => !picked.has(r.recordId));
+  const unpicked = ordered.filter((r) => !picked.has(r.recordId));
 
   // Rules are filtered to the selected documents' types. With several types
   // picked, a rule is offered if it applies to any of them — the per-document
@@ -417,7 +438,7 @@ export function RunReview({
         )}
 
         <div className="doclist">
-          {records.map((r) => {
+          {ordered.map((r) => {
             const on = picked.has(r.recordId);
             return (
               <div key={r.recordId} className={`docrow ${on ? "on" : ""}`}>

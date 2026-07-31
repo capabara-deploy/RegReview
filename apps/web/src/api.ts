@@ -41,6 +41,8 @@ export interface RunSummary {
   startedAt: string;
   finishedAt: string | null;
   status: string;
+  /** Why a failed run failed. Null on healthy runs. */
+  error: string | null;
 }
 
 export interface RecordDetail {
@@ -210,6 +212,8 @@ export const api = {
     }),
 
   job: (jobId: string) => json<Job>(`/api/jobs/${jobId}`),
+  /** Every job the server knows about — lets a reloaded page re-attach. */
+  jobs: () => json<Job[]>("/api/jobs"),
 
   /** Reclassify a document. Changes which rules apply; leaves past runs alone. */
   setRecordType: (recordId: string, recordType: string) =>
