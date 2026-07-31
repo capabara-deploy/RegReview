@@ -201,6 +201,8 @@ export const api = {
     ruleIds?: string[];
     samples?: number;
     offline?: boolean;
+    related?: string[];
+    crossCheckSelected?: boolean;
   }) =>
     json<{ jobId: string; records: number }>("/api/reviews/batch", {
       method: "POST",

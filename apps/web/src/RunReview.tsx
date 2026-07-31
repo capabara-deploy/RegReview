@@ -71,6 +71,7 @@ export function RunReview({
 }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [crossCheck, setCrossCheck] = useState<Set<string>>(new Set());
+  const [crossCheckSelected, setCrossCheckSelected] = useState(false);
   const [samples, setSamples] = useState(1);
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +106,9 @@ export function RunReview({
   }, [records.length]);
 
   const pickedRecords = records.filter((r) => picked.has(r.recordId));
-  const single = pickedRecords.length === 1 ? pickedRecords[0] : null;
+  // Only documents not already under review can be cross-check targets: a record
+  // compared against itself agrees with itself on everything.
+  const unpicked = records.filter((r) => !picked.has(r.recordId));
 
   // Rules are filtered to the selected documents' types. With several types
   // picked, a rule is offered if it applies to any of them — the per-document
@@ -341,6 +344,8 @@ export function RunReview({
           recordIds: pickedRecords.map((r) => r.recordId),
           samples,
           offline,
+          related: [...crossCheck],
+          crossCheckSelected,
           ...(ruleIds ? { ruleIds } : {}),
         });
         onStartJob(jobId);
@@ -350,7 +355,16 @@ export function RunReview({
     } finally {
       setBusy(false);
     }
-  }, [pickedRecords, samples, offline, crossCheck, isAll, selectedApplicable, onStartJob]);
+  }, [
+    pickedRecords,
+    samples,
+    offline,
+    crossCheck,
+    crossCheckSelected,
+    isAll,
+    selectedApplicable,
+    onStartJob,
+  ]);
 
   const anyRunning = jobs.some((j) => j.status === "running");
 
@@ -462,8 +476,9 @@ export function RunReview({
         </p>
       </section>
 
-      {/* 2 — cross-check, only meaningful for a single document */}
-      {single && records.length > 1 && (
+      {/* 2 — cross-check. Available regardless of how many documents are under
+             review: each reviewed document is checked against the same targets. */}
+      {records.length > 1 && (
         <section className="rp-section">
           <div className="rp-head">
             <h2>Cross-check against</h2>
@@ -471,29 +486,53 @@ export function RunReview({
               finds facts that disagree between documents — risk ratings, dates, thresholds
             </span>
           </div>
+
+          {pickedRecords.length > 1 && (
+            <label className="rc-opt rp-eachother">
+              <input
+                type="checkbox"
+                checked={crossCheckSelected}
+                onChange={(e) => setCrossCheckSelected(e.target.checked)}
+              />
+              also check the {pickedRecords.length} selected documents against{" "}
+              <strong>each other</strong>
+              <span className="muted small">
+                {" "}
+                — facts are extracted once per document and cached, so this costs
+                little beyond the first pass
+              </span>
+            </label>
+          )}
+
           <div className="doclist">
-            {records
-              .filter((r) => r.recordId !== single.recordId)
-              .map((r) => (
-                <label
-                  key={r.recordId}
-                  className={`docrow ${crossCheck.has(r.recordId) ? "on" : ""}`}
-                >
-                  <span className="docrow-main">
-                    <input
-                      type="checkbox"
-                      checked={crossCheck.has(r.recordId)}
-                      onChange={() => toggleCross(r.recordId)}
-                    />
-                    <span className="docrow-name">{r.docId ?? r.filename}</span>
-                    <span className="docrow-type">{r.recordType.replace(/_/g, " ")}</span>
-                  </span>
-                </label>
-              ))}
+            {unpicked.length === 0 && (
+              <p className="muted small">
+                Every document is selected for review. Untick one to use it as a
+                cross-check target instead
+                {pickedRecords.length > 1 ? ", or use the option above." : "."}
+              </p>
+            )}
+            {unpicked.map((r) => (
+              <label
+                key={r.recordId}
+                className={`docrow ${crossCheck.has(r.recordId) ? "on" : ""}`}
+              >
+                <span className="docrow-main">
+                  <input
+                    type="checkbox"
+                    checked={crossCheck.has(r.recordId)}
+                    onChange={() => toggleCross(r.recordId)}
+                  />
+                  <span className="docrow-name">{r.docId ?? r.filename}</span>
+                </span>
+                <span className="docrow-typeflat">{r.recordType.replace(/_/g, " ")}</span>
+              </label>
+            ))}
           </div>
-          {crossCheck.size === 0 && (
+
+          {crossCheck.size === 0 && !crossCheckSelected && (
             <p className="muted small rp-foot">
-              None selected — the consistency pass will not run.
+              Nothing to compare against — the consistency pass will not run.
             </p>
           )}
         </section>

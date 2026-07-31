@@ -467,6 +467,29 @@ body {
   border-color: var(--accent);
 }
 
+/* Flat type label for cross-check rows, where the type is context, not editable. */
+.docrow-typeflat {
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.rp-eachother {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+}
+
 .rp-uploadtype {
   display: flex;
   align-items: center;

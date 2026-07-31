@@ -660,6 +660,17 @@ const BatchReviewBody = z.object({
   ruleIds: z.array(z.string()).default([]),
   samples: z.number().int().min(1).max(5).default(1),
   offline: z.boolean().default(false),
+  /** Documents every reviewed record is checked for consistency against. */
+  related: z.array(z.string()).default([]),
+  /**
+   * Also check the reviewed documents against each other.
+   *
+   * Cheap, because facts are extracted once per document and cached: N documents
+   * cost N extractions and the comparison itself is a join, not N-squared model
+   * calls. That is what makes "are these five CAPAs consistent with each other"
+   * a question worth asking at all.
+   */
+  crossCheckSelected: z.boolean().default(false),
 });
 
 /**
@@ -700,6 +711,15 @@ app.post("/api/reviews/batch", async (request, reply) => {
     return reply.code(404).send({ error: "none of the requested records were found" });
   }
 
+  // Documents to check every reviewed record against. A record is never its own
+  // cross-check target, so the selected set is filtered per document below.
+  const relatedDocs = [];
+  for (const id of parsed.data.related) {
+    if (parsed.data.recordIds.includes(id)) continue;
+    const r = loadRecord(db, id);
+    if (r) relatedDocs.push(r);
+  }
+
   const job: Job = {
     jobId: randomUUID(),
     recordId: loaded[0]!.record.recordId,
@@ -726,12 +746,24 @@ app.post("/api/reviews/batch", async (request, reply) => {
       slot.status = "running";
       slot.phase = "starting";
       job.progress.push(`[${i + 1}/${loaded.length}] ${label}`);
+
+      // Explicit cross-check targets, plus the other documents in this batch
+      // when asked. Excluding this document keeps a record from being compared
+      // against itself, which would report every value as agreeing with itself.
+      const related = [
+        ...relatedDocs,
+        ...(parsed.data.crossCheckSelected
+          ? loaded.filter((d) => d.record.recordId !== doc.record.recordId)
+          : []),
+      ];
+
       try {
         const result = await runReview({
           record: doc.record,
           blocks: doc.blocks,
           samples: parsed.data.samples,
           offline: parsed.data.offline,
+          ...(related.length > 0 ? { related } : {}),
           ...(parsed.data.ruleIds.length > 0 ? { ruleIds: parsed.data.ruleIds } : {}),
           onProgress: (m) => {
             job.progress.push(`    ${m}`);
