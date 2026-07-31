@@ -26,7 +26,17 @@ export interface ReviewInput {
   runId: string;
   record: RecordDoc;
   blocks: Block[];
-  /** Rules already filtered to those applicable to this record type. */
+  /**
+   * Rules already filtered to those applicable to this record type, and — when
+   * the caller scoped the review — to the specific rules requested.
+   *
+   * Scoping is what makes "a standard was revised; which of my documents now
+   * violate it" affordable. Running two new rules across a document base is one
+   * check pass instead of four, so it costs roughly a seventh of a full review
+   * per document. It is also the only honest way to answer that question: a full
+   * re-review diffed against a prior run buries the real delta under repeat-run
+   * variance, because the engine does not reproduce its own output exactly.
+   */
   rules: Rule[];
   /**
    * Other records in scope, for cross-document consistency. Facts are extracted

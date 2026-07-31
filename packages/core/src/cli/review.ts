@@ -6,6 +6,7 @@ import { migrate } from "../db/migrate.js";
 import { runAgreement } from "../review/anchor.js";
 import { ClaudeReviewEngine } from "../review/claudeEngine.js";
 import { OfflineReviewEngine } from "../review/offlineEngine.js";
+import { categoriesForRules } from "../runReview.js";
 import {
   finishRun,
   loadRulesFor,
@@ -34,6 +35,8 @@ interface Args {
   samples: number;
   /** Other documents to check cross-document consistency against. */
   related: string[];
+  /** Restrict the review to these rules. Empty means every applicable rule. */
+  ruleIds: string[];
 }
 
 function parseArgs(argv: string[]): Args | string {
@@ -45,6 +48,7 @@ function parseArgs(argv: string[]): Args | string {
   let quiet = false;
   let samples = 1;
   const related: string[] = [];
+  const ruleIds: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -63,6 +67,12 @@ function parseArgs(argv: string[]): Args | string {
       const value = argv[++i];
       if (!value) return "--related needs a file path";
       related.push(value);
+    } else if (arg === "--rule") {
+      const value = argv[++i];
+      if (!value) return "--rule needs a ruleId";
+      // Comma-separated is accepted so a scan of several changed clauses is one
+      // flag rather than five.
+      ruleIds.push(...value.split(",").map((s) => s.trim()).filter(Boolean));
     } else if (arg === "--type") {
       const parsed = RecordType.safeParse(argv[++i]);
       if (!parsed.success) {
@@ -84,11 +94,15 @@ function parseArgs(argv: string[]): Args | string {
       "  --repeat N   run the whole review N times and report agreement between runs.\n" +
       "  --related F  another document to check cross-document consistency against.\n" +
       "               Repeatable. Without it, the consistency pass has nothing to\n" +
-      "               compare and does not run."
+      "               compare and does not run.\n" +
+      "  --rule ID    check only this rule. Repeatable, and accepts a comma-separated\n" +
+      "               list. Scoping runs only the check passes the selected rules\n" +
+      "               belong to, so it costs a fraction of a full review — this is\n" +
+      "               how you answer 'a standard changed; which documents violate it'."
     );
   }
 
-  return { path, recordType, offline, repeat, skipVerifier, quiet, samples, related };
+  return { path, recordType, offline, repeat, skipVerifier, quiet, samples, related, ruleIds };
 }
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
@@ -198,11 +212,28 @@ async function main(): Promise<void> {
     console.warn(`\nWARNING: ${extraction.warning}\n`);
   }
 
-  const rules = loadRulesFor(record.recordType);
-  if (rules.length === 0) {
+  const applicableRules = loadRulesFor(record.recordType);
+  if (applicableRules.length === 0) {
     console.error(
       "No rules apply to this record type. Run `npm run ingest:rules` " +
         "(and `npm run ingest:observations` before it).",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // --rule narrows the review. A selection matching nothing is an error, not an
+  // empty run: "0 findings" from a scan that never ran is indistinguishable from
+  // a clean document, which is the worst output this tool can produce.
+  const rules =
+    parsed.ruleIds.length > 0
+      ? applicableRules.filter((r) => parsed.ruleIds.includes(r.ruleId))
+      : applicableRules;
+  if (rules.length === 0) {
+    console.error(
+      `\nNone of the selected rule(s) apply to a ${record.recordType} record:\n` +
+        parsed.ruleIds.map((id) => `  ${id}`).join("\n") +
+        `\n\nRun \`npm run rules:report\` to see what applies.`,
     );
     process.exitCode = 1;
     return;
@@ -217,7 +248,16 @@ async function main(): Promise<void> {
   console.log(`Doc ID   : ${record.docId ?? "(not found in text)"}`);
   console.log(`Revision : ${record.revision ?? "(not found in text)"}`);
   console.log(`Blocks   : ${blocks.length}`);
-  console.log(`Rules    : ${rules.length} applicable`);
+  if (parsed.ruleIds.length > 0) {
+    const unknown = parsed.ruleIds.filter((id) => !rules.some((r) => r.ruleId === id));
+    console.log(
+      `Rules    : SCOPED to ${rules.length} of ${applicableRules.length} applicable` +
+        (unknown.length > 0 ? ` (${unknown.length} not applicable: ${unknown.join(", ")})` : ""),
+    );
+    for (const r of rules) console.log(`           - ${r.ruleId}  ${r.citation}`);
+  } else {
+    console.log(`Rules    : ${rules.length} applicable`);
+  }
 
   // Load documents in scope for cross-document consistency. Each is stored and
   // blocked exactly like the record under review, because a consistency finding
@@ -283,12 +323,22 @@ async function main(): Promise<void> {
           "  Requests go there, not to api.anthropic.com. Unset it if unintended.\n",
       );
     }
+    // A scoped review runs only the passes its rules belong to. Without this,
+    // selecting two ISO clause rules would still fire completeness and
+    // plausibility — those passes accept iso_clause rules too — which triples
+    // the cost and answers a question nobody asked.
+    const scopedCategories =
+      parsed.ruleIds.length > 0 ? categoriesForRules(rules) : undefined;
     engine = new ClaudeReviewEngine({
       ...(parsed.skipVerifier ? { skipVerifier: true } : {}),
       ...(parsed.samples > 1 ? { samples: parsed.samples } : {}),
+      ...(scopedCategories ? { categories: scopedCategories } : {}),
       ...(parsed.quiet ? {} : { onProgress: (m) => console.log(`  ${m}`) }),
     });
     console.log(`Engine   : ${engine.id} (effort=${config.effort})`);
+    if (scopedCategories) {
+      console.log(`Passes   : ${scopedCategories.join(", ")} (scoped, of 4)`);
+    }
     if (parsed.samples > 1) {
       console.log(
         `Sampling : ${parsed.samples} samples per check, majority vote ` +

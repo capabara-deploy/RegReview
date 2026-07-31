@@ -111,6 +111,15 @@ export interface UploadResult {
   warning: string | null;
 }
 
+export interface BatchResult {
+  recordId: string;
+  filename: string;
+  docId: string | null;
+  runId?: string;
+  findingCount?: number;
+  error?: string;
+}
+
 export interface Job {
   jobId: string;
   recordId: string;
@@ -119,6 +128,8 @@ export interface Job {
   runId?: string;
   findingCount?: number;
   error?: string;
+  /** Present for batch jobs: one entry per document reviewed. */
+  results?: BatchResult[];
 }
 
 export interface SopSummary {
@@ -148,6 +159,8 @@ export const api = {
   findings: (runId: string) => json<Finding[]>(`/api/runs/${runId}/findings`),
   rule: (ruleId: string) => json<Rule>(`/api/rules/${ruleId}`),
   rules: () => json<CorpusRule[]>("/api/rules"),
+  /** Every selectable rule, including the customer's own SOP clauses. */
+  allRules: () => json<CorpusRule[]>("/api/rules?include=all"),
   events: (runId: string, findingId: string) =>
     json<FindingEvent[]>(`/api/runs/${runId}/findings/${findingId}/events`),
   setStatus: (runId: string, findingId: string, status: FindingStatus, note?: string) =>
@@ -171,9 +184,21 @@ export const api = {
 
   startReview: (
     recordId: string,
-    opts: { related?: string[]; samples?: number; offline?: boolean },
+    opts: { related?: string[]; samples?: number; offline?: boolean; ruleIds?: string[] },
   ) =>
     json<{ jobId: string }>(`/api/records/${recordId}/review`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
+
+  /** Review many documents against one rule set — the standards-transition scan. */
+  startBatchReview: (opts: {
+    recordIds: string[];
+    ruleIds?: string[];
+    samples?: number;
+    offline?: boolean;
+  }) =>
+    json<{ jobId: string; records: number }>("/api/reviews/batch", {
       method: "POST",
       body: JSON.stringify(opts),
     }),

@@ -248,14 +248,20 @@ function mapRule(row: RuleRow) {
  * FDA citation frequency inherited through each rule's CFR crosswalk. The
  * customer's editable procedures are served separately from /api/sops.
  */
-app.get("/api/rules", () => {
+app.get("/api/rules", (request) => {
+  // ?include=all adds the customer's own SOP clauses. The reference library in
+  // the Procedures view wants only the shipped corpus; the review rule picker
+  // wants everything selectable, including the customer's procedures.
+  const { include } = request.query as { include?: string };
+  const withSops = include === "all";
+
   const db = getDb();
   const rows = db
     .prepare(
       `SELECT rule_id, source, citation, title, expectation, applies_to,
               harm_linked, citation_frequency, frequency_percentile
          FROM rules
-        WHERE source != 'sop'
+        ${withSops ? "" : "WHERE source != 'sop'"}
         ORDER BY source, frequency_percentile DESC, citation_frequency DESC`,
     )
     .all() as RuleRow[];
@@ -374,6 +380,7 @@ app.post("/api/records", async (request, reply) => {
  */
 interface Job {
   jobId: string;
+  /** The record under review, or the first of them for a batch. */
   recordId: string;
   status: "running" | "complete" | "failed";
   progress: string[];
@@ -381,6 +388,15 @@ interface Job {
   findingCount?: number;
   error?: string;
   startedAt: string;
+  /** Per-record outcomes. Length 1 for a single review, N for a batch. */
+  results?: {
+    recordId: string;
+    filename: string;
+    docId: string | null;
+    runId?: string;
+    findingCount?: number;
+    error?: string;
+  }[];
 }
 const jobs = new Map<string, Job>();
 
@@ -391,6 +407,13 @@ const StartReviewBody = z.object({
   samples: z.number().int().min(1).max(5).default(1),
   /** Offline keyword baseline — free, crude, for smoke-testing the pipeline. */
   offline: z.boolean().default(false),
+  /**
+   * Restrict the review to these rules. Empty means every applicable rule.
+   *
+   * This is what a standards-transition scan uses: pick the requirements that
+   * changed, run only those, across as many documents as needed.
+   */
+  ruleIds: z.array(z.string()).default([]),
 });
 
 app.post("/api/records/:recordId/review", async (request, reply) => {
@@ -438,6 +461,7 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
         related,
         samples: parsed.data.samples,
         offline: parsed.data.offline,
+        ...(parsed.data.ruleIds.length > 0 ? { ruleIds: parsed.data.ruleIds } : {}),
         onProgress: (m) => {
           job.progress.push(m);
           // Bound the log so a long run can't grow it without limit.
@@ -454,6 +478,101 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
   })();
 
   return reply.code(202).send({ jobId: job.jobId });
+});
+
+const BatchReviewBody = z.object({
+  recordIds: z.array(z.string()).min(1).max(500),
+  ruleIds: z.array(z.string()).default([]),
+  samples: z.number().int().min(1).max(5).default(1),
+  offline: z.boolean().default(false),
+});
+
+/**
+ * Review many documents against the same rule set.
+ *
+ * This is the standards-transition workflow: a requirement changed, and the
+ * question is which documents in the quality system now violate it. Documents
+ * are reviewed one at a time rather than concurrently — the engine already runs
+ * its own check passes concurrently and is bounded internally, so stacking a
+ * second layer of concurrency here would just trip rate limits and lose the
+ * whole batch to a capacity blip.
+ *
+ * One document failing must not abort the rest. Each result carries its own
+ * error, and the job completes with a mix of successes and failures rather than
+ * discarding work already paid for.
+ */
+app.post("/api/reviews/batch", async (request, reply) => {
+  const parsed = BatchReviewBody.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "invalid body", detail: parsed.error.issues });
+  }
+
+  if (!parsed.data.offline && !process.env["ANTHROPIC_API_KEY"] && !process.env["ANTHROPIC_AUTH_TOKEN"]) {
+    return reply.code(412).send({
+      error:
+        "no Anthropic credential configured on the server. Set ANTHROPIC_API_KEY " +
+        "in the server's environment, or run an offline review.",
+    });
+  }
+
+  const db = getDb();
+  const loaded = [];
+  for (const id of parsed.data.recordIds) {
+    const r = loadRecord(db, id);
+    if (r) loaded.push(r);
+  }
+  if (loaded.length === 0) {
+    return reply.code(404).send({ error: "none of the requested records were found" });
+  }
+
+  const job: Job = {
+    jobId: randomUUID(),
+    recordId: loaded[0]!.record.recordId,
+    status: "running",
+    progress: [],
+    startedAt: new Date().toISOString(),
+    results: loaded.map((r) => ({
+      recordId: r.record.recordId,
+      filename: r.record.filename,
+      docId: r.record.docId,
+    })),
+  };
+  jobs.set(job.jobId, job);
+
+  void (async () => {
+    let totalFindings = 0;
+    for (const [i, doc] of loaded.entries()) {
+      const label = doc.record.docId ?? doc.record.filename;
+      const slot = job.results![i]!;
+      job.progress.push(`[${i + 1}/${loaded.length}] ${label}`);
+      try {
+        const result = await runReview({
+          record: doc.record,
+          blocks: doc.blocks,
+          samples: parsed.data.samples,
+          offline: parsed.data.offline,
+          ...(parsed.data.ruleIds.length > 0 ? { ruleIds: parsed.data.ruleIds } : {}),
+          onProgress: (m) => {
+            job.progress.push(`    ${m}`);
+            if (job.progress.length > 400) job.progress.splice(0, job.progress.length - 400);
+          },
+        });
+        slot.runId = result.run.runId;
+        slot.findingCount = result.findings.length;
+        totalFindings += result.findings.length;
+        job.progress.push(
+          `    -> ${result.findings.length} finding(s)`,
+        );
+      } catch (err) {
+        slot.error = err instanceof Error ? err.message : String(err);
+        job.progress.push(`    -> FAILED: ${slot.error}`);
+      }
+    }
+    job.status = "complete";
+    job.findingCount = totalFindings;
+  })();
+
+  return reply.code(202).send({ jobId: job.jobId, records: loaded.length });
 });
 
 app.get("/api/jobs/:jobId", (request, reply) => {

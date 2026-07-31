@@ -136,13 +136,17 @@ npm run review -- <file> --samples 3
 # See what the verifier pass is actually removing.
 npm run review -- <file> --no-verifier
 
+# Check ONE requirement instead of all of them. See "Standards transitions".
+npm run review -- <file> --type risk_analysis \
+  --rule iso14971-7.1-risk-control-option-analysis,iso14971-8-overall-residual-risk
+
 # Compare two stored runs (free — reads the database, no API calls).
 cd packages/corpus && npx tsx src/cli/diffRuns.ts --latest
 cd packages/corpus && npx tsx src/cli/agreement.ts <runIdA> <runIdB>
 ```
 
 Flags: `--type <recordType>` (default `capa`), `--offline`, `--repeat N`,
-`--samples N`, `--no-verifier`, `--quiet`.
+`--samples N`, `--rule ID[,ID...]`, `--no-verifier`, `--quiet`.
 
 The CLI prints, per finding: the requirement, the verbatim quote, the problem,
 why it matters in inspection terms, a direction for the fix, and **why it was
@@ -178,8 +182,15 @@ npm run dev:web       # Phase 4
       3,367, which both confirms the parse and validates the CAPA-first wedge
 - [x] **1b** — 21 CFR Part 820 at two dates. Confirmed §820.30, §820.100 and
       §820.198 are all gone from the current text
-- [x] **1d** — 15 authored rules (12 ISO-clause, 3 logic), each inheriting real
-      FDA citation frequency via its CFR crosswalk
+- [x] **1d** — 29 authored rules (26 ISO-clause, 3 logic), each inheriting real
+      FDA citation frequency via its CFR crosswalk. ISO 13485 §8.5.2–8.5.3 for
+      CAPA, and **ISO 14971:2019 for risk management** — 14 clause rules covering
+      the plan, hazard identification, estimation, evaluation, the risk-control
+      priority order, residual and overall residual risk, benefit-risk, and the
+      production/post-production feedback loop
+- [x] **Rule-scoped and batch review** — pick specific requirements (shipped
+      corpus and/or the customer's own SOP clauses) and scan a document base
+      against just those. Built for standards transitions; see that section above
 - [x] **3** — Review engine: four LLM check passes (concurrent, bounded at 4),
       verifier pass, anchoring/hallucination guard, deterministic near-duplicate
       collapse, derived severity, self-consistency voting, persistence with audit
@@ -217,6 +228,56 @@ The eval harness is built **before** the engine on purpose. Precision is the
 whole asset with this audience — a false alarm costs credibility that a missed
 finding doesn't — so there has to be a way to measure it from the first day the
 engine produces output.
+
+### Standards transitions
+
+The recurring customer problem, in their words: *"FDA standards get updated
+regularly and you're expected to update everything to comply — which is easier
+said than done if you have to update your entire risk management file for a new
+version of ISO 14971."*
+
+A company is almost always mid-transition on something — 13485, 14971, 62304,
+60601, 10993, EU MDR, plus FDA guidance. The question is never "review this
+document again", it is **"which of my documents violate the requirements that
+changed"**. So a review can be scoped to specific rules:
+
+```sh
+npm run review -- <file> --type risk_analysis --rule iso14971-8-overall-residual-risk
+```
+
+and in the UI, **Rules to evaluate** in the review controls picks any subset of
+the shipped corpus and the customer's own SOP clauses, with **Also scan other
+documents** running the same selection across a document base.
+
+Two things make this work rather than merely exist:
+
+**Scoping drops whole check passes, not just rules.** The completeness and
+plausibility passes accept `iso_clause` rules as well as `logic` ones, so a naive
+implementation would fire three passes for two selected ISO rules — triple the
+cost, and near-duplicate findings from passes whose briefs have nothing to do
+with the question. `categoriesForRules` in `runReview.ts` runs only the passes
+the selection belongs to. Measured on the risk-management fixture against three
+14971 clauses: **$0.11 and about 40 seconds**, versus $0.63–0.95 for a full
+review. Four hundred documents against one changed requirement is roughly $40.
+
+**Do not implement this as "re-review everything and diff the runs."** That was
+the obvious design and it is wrong here. Rule-level repeat-run agreement is 71%,
+so about 29% of findings differ between two runs of the *same* corpus for reasons
+that have nothing to do with a standard changing. If a revision genuinely moves
+5% of findings, the real signal arrives buried under roughly six times its volume
+in engine noise, and the first three obvious garbage entries cost the feature its
+credibility. Scoping sidesteps this entirely: a *new* rule has no prior findings
+to diff against, so everything it reports is a genuine new-standard violation by
+construction.
+
+A selection that matches no applicable rule is an **error**, not an empty run.
+"0 findings" from a scan that never executed is indistinguishable from a clean
+document.
+
+The remaining gap is *modified* rules — a tightened expectation on a clause
+already being checked — where the old rule already fired somewhere and "was this
+always violating, or did it become violating?" is a real question. That is the
+case that needs pinned prior findings, and it is not built.
 
 ## Design decisions worth knowing before you change things
 

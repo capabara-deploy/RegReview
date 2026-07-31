@@ -3,7 +3,7 @@ import type { ReviewEngine, ReviewStats } from "./engine.js";
 import { ClaudeReviewEngine } from "./review/claudeEngine.js";
 import { OfflineReviewEngine } from "./review/offlineEngine.js";
 import { finishRun, loadRulesFor, saveFindings, startRun } from "./store.js";
-import type { Block, Finding, RecordDoc, Run } from "./types.js";
+import type { Block, CheckCategory, Finding, RecordDoc, Rule, Run } from "./types.js";
 
 /**
  * One review, orchestrated.
@@ -28,6 +28,17 @@ export interface RunReviewArgs {
   samples?: number;
   /** Use the offline keyword baseline instead of the model. No spend, crude output. */
   offline?: boolean;
+  /**
+   * Restrict the review to these rules. Omit to check every rule that applies to
+   * the record type.
+   *
+   * The motivating case is a standard revision: a customer transitioning to a new
+   * edition of ISO 14971 needs to know which of several hundred documents violate
+   * the requirements that changed, and does not need — or want to pay for — a full
+   * re-review of each one. Scoping also keeps the answer clean, because the only
+   * findings produced are the ones the selected rules generate.
+   */
+  ruleIds?: string[];
   onProgress?: (message: string) => void;
 }
 
@@ -37,19 +48,72 @@ export interface RunReviewResult {
   stats: ReviewStats;
 }
 
+/**
+ * Which check passes a scoped rule set should run.
+ *
+ * Without this, selecting two ISO clause rules would still fire compliance,
+ * completeness and plausibility, because the latter two accept `iso_clause`
+ * rules as well as `logic` ones. That triples the cost of a scoped scan and
+ * produces near-duplicate findings from passes whose briefs ("did the record
+ * close every loop it opened") have nothing to do with the question being asked.
+ *
+ * So a scoped review runs only the passes the selected rules actually belong to.
+ * An unscoped review is unaffected and still runs all four.
+ */
+export function categoriesForRules(rules: Rule[]): CheckCategory[] {
+  const categories: CheckCategory[] = [];
+  if (rules.some((r) => r.source === "cfr" || r.source === "iso_clause" || r.source === "guidance"))
+    categories.push("compliance");
+  if (rules.some((r) => r.source === "sop")) categories.push("conformance");
+  if (rules.some((r) => r.source === "logic")) categories.push("completeness", "plausibility");
+  return categories;
+}
+
 export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
-  const rules = loadRulesFor(args.record.recordType);
-  if (rules.length === 0) {
+  const applicable = loadRulesFor(args.record.recordType);
+  if (applicable.length === 0) {
     throw new Error(
       `no rules apply to record type "${args.record.recordType}". ` +
         `Load the corpus (ingest:rules) first.`,
     );
   }
 
+  // Scope to the requested rules, if any. A requested rule that does not apply
+  // to this record type is reported rather than silently dropped: "0 findings"
+  // from a scan that never ran the rule reads exactly like a clean document,
+  // and that is the most dangerous output this tool can produce.
+  let rules = applicable;
+  if (args.ruleIds && args.ruleIds.length > 0) {
+    const wanted = new Set(args.ruleIds);
+    rules = applicable.filter((r) => wanted.has(r.ruleId));
+
+    const missing = [...wanted].filter((id) => !rules.some((r) => r.ruleId === id));
+    if (rules.length === 0) {
+      throw new Error(
+        `none of the ${wanted.size} selected rule(s) apply to record type ` +
+          `"${args.record.recordType}": ${[...wanted].join(", ")}`,
+      );
+    }
+    if (missing.length > 0) {
+      args.onProgress?.(
+        `note: ${missing.length} selected rule(s) do not apply to a ` +
+          `${args.record.recordType} record and were skipped: ${missing.join(", ")}`,
+      );
+    }
+    args.onProgress?.(
+      `scoped to ${rules.length} of ${applicable.length} applicable rule(s)`,
+    );
+  }
+
+  const scopedCategories = args.ruleIds && args.ruleIds.length > 0
+    ? categoriesForRules(rules)
+    : undefined;
+
   const engine: ReviewEngine = args.offline
     ? new OfflineReviewEngine()
     : new ClaudeReviewEngine({
         ...(args.samples && args.samples > 1 ? { samples: args.samples } : {}),
+        ...(scopedCategories ? { categories: scopedCategories } : {}),
         ...(args.onProgress ? { onProgress: args.onProgress } : {}),
       });
 

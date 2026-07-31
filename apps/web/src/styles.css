@@ -352,6 +352,159 @@ body {
   color: var(--text);
 }
 
+/* ---------- review controls: rule picker + batch scan ---------- */
+
+.rc-disclose {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rc-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 6px;
+  margin-left: 6px;
+}
+
+.rc-warn {
+  font-size: 11.5px;
+  color: var(--high-line);
+  font-weight: 600;
+}
+
+.rc-rules {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 10px 0 4px;
+  border-top: 1px dashed var(--border);
+  margin-top: 6px;
+}
+
+.rc-rule-group {
+  min-width: 260px;
+  flex: 1;
+  max-width: 420px;
+}
+
+.rc-rule-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.rc-rule-group-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 700;
+  flex: 1;
+}
+
+.rc-mini {
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  cursor: pointer;
+}
+
+.rc-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.rc-rule-body {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+
+.rc-rule-title {
+  font-size: 12px;
+}
+
+.rc-rule-cite {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.rc-results {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.rc-results h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.rc-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 10px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.rc-result:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.rc-result-name {
+  font-weight: 600;
+}
+
+.rc-result-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rc-result-count.hit {
+  color: var(--high-line);
+  font-weight: 600;
+}
+
+.rc-result-err {
+  font-size: 11px;
+  color: var(--high-line);
+}
+
 /* ---------- procedures: tabs + rule library ---------- */
 
 .procedures-wrap {
