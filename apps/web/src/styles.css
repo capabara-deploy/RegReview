@@ -709,6 +709,52 @@ body {
   cursor: pointer;
 }
 
+.rc-rule.off {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.rc-mini:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* A group with nothing applicable still renders, with the reason stated. */
+.rc-blocked {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--med-line);
+  background: var(--med-bg);
+  border: 1px solid var(--med-line);
+  border-radius: 5px;
+  padding: 6px 9px;
+  margin-bottom: 8px;
+}
+
+.rc-skipwarn {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--high-line);
+  background: var(--high-bg);
+  border: 1px solid var(--high-line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+}
+
+.rc-skipwarn ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.rc-skipwarn li {
+  margin-bottom: 2px;
+}
+
+.rc-skip-pass {
+  font-weight: 700;
+}
+
 .rc-rule-body {
   display: flex;
   flex-direction: column;

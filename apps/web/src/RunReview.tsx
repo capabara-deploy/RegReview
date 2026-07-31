@@ -134,14 +134,71 @@ export function RunReview({
   const perDoc = offline ? 0 : (0.13 * passesFor(selectedApplicable) + 0.1) * samples;
   const estCost = perDoc * Math.max(1, pickedRecords.length);
 
+  /**
+   * Groups are built from the whole corpus, not from the applicable subset.
+   *
+   * Filtering to applicable rules first made a group vanish when nothing in it
+   * governed the selected document — most visibly the customer's own procedures,
+   * which ship scoped to the record types they were loaded for. A disappearing
+   * group is the same failure as a silently skipped check pass: half the review
+   * is missing and the screen still looks complete. So the group always renders,
+   * inapplicable rules render disabled, and the reason is stated.
+   */
   const groups = useMemo(
     () =>
-      SOURCE_GROUPS.map((g) => ({
-        ...g,
-        rules: applicable.filter((r) => g.sources.includes(r.source)),
-      })).filter((g) => g.rules.length > 0),
-    [applicable],
+      SOURCE_GROUPS.map((g) => {
+        const inGroup = allRules.filter((r) => g.sources.includes(r.source));
+        const usable = inGroup.filter(
+          (r) => r.appliesTo.length === 0 || r.appliesTo.some((t) => types.has(t)),
+        );
+        // Which record types this group's rules DO cover, so the explanation can
+        // name them instead of just saying "not applicable".
+        const covers = [
+          ...new Set(inGroup.flatMap((r) => r.appliesTo)),
+        ].sort();
+        return { ...g, rules: inGroup, usable, covers };
+      }).filter((g) => g.rules.length > 0),
+    [allRules, types],
   );
+
+  // A complete noun phrase, so callers never have to append "record" and end up
+  // with "a this record record" when nothing is selected.
+  const typeLabel =
+    types.size === 0
+      ? "the selected documents"
+      : `${[...types].map((t) => t.replace(/_/g, " ")).join(" / ")} record${types.size > 1 ? "s" : ""}`;
+
+  /**
+   * Check passes that will not run, and why.
+   *
+   * A skipped pass is the most dangerous thing this tool can hide: the review
+   * comes back looking complete while a whole category was never checked. The
+   * distinction between "nothing of this kind governs this document" and "you
+   * turned it off" matters — the first is a configuration problem the user can
+   * fix, the second is a choice they already made.
+   */
+  const skipped = useMemo(() => {
+    const out: { pass: string; reason: string; fixable: boolean }[] = [];
+    const check = (
+      pass: string,
+      sources: string[],
+      hint: string,
+    ) => {
+      const inCorpus = allRules.filter((r) => sources.includes(r.source));
+      if (inCorpus.length === 0) return; // nothing of this kind exists at all
+      const usable = applicable.filter((r) => sources.includes(r.source));
+      const chosen = selectedApplicable.filter((r) => sources.includes(r.source));
+      if (usable.length === 0) {
+        out.push({ pass, reason: `nothing applies to ${typeLabel} — ${hint}`, fixable: true });
+      } else if (chosen.length === 0) {
+        out.push({ pass, reason: "deselected above", fixable: false });
+      }
+    };
+    check("conformance", ["sop"], "your procedures are scoped to other record types");
+    check("compliance", ["iso_clause", "cfr", "guidance"], "no standards rules cover it yet");
+    check("completeness / plausibility", ["logic"], "no logic rules cover it");
+    return out;
+  }, [allRules, applicable, selectedApplicable, typeLabel]);
 
   // All of these use the functional updater rather than reading the current set
   // from the closure. Reading it directly means two updates dispatched before a
@@ -412,39 +469,108 @@ export function RunReview({
           </div>
         </div>
 
+        {/* A skipped pass must never be silent. A review that never ran a whole
+            category comes back looking exactly like a clean one. */}
+        {skipped.length > 0 && (
+          <div className="rc-skipwarn">
+            <strong>
+              {skipped.length === 1 ? "One check pass" : `${skipped.length} check passes`} will
+              not run:
+            </strong>
+            <ul>
+              {skipped.map((s) => (
+                <li key={s.pass}>
+                  <span className="rc-skip-pass">{s.pass}</span> — {s.reason}
+                  {s.fixable && s.pass === "conformance" && (
+                    <>
+                      {" "}
+                      <button className="rc-mini" onClick={() => setShowRules(true)}>
+                        show
+                      </button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {showRules && (
           <div className="rc-rules">
             {groups.map((g) => {
-              const on = g.rules.filter((r) => selected.has(r.ruleId)).length;
+              const on = g.usable.filter((r) => selected.has(r.ruleId)).length;
+              const blocked = g.usable.length === 0;
               return (
                 <div key={g.key} className="rc-rule-group">
                   <div className="rc-rule-group-head">
                     <span className="rc-rule-group-title">
                       {g.label}
                       <span className="rc-badge">
-                        {on}/{g.rules.length}
+                        {on}/{g.usable.length}
                       </span>
                     </span>
-                    <button className="rc-mini" onClick={() => setGroup(g.rules, true)}>
+                    <button
+                      className="rc-mini"
+                      disabled={blocked}
+                      onClick={() => setGroup(g.usable, true)}
+                    >
                       all
                     </button>
-                    <button className="rc-mini" onClick={() => setGroup(g.rules, false)}>
+                    <button
+                      className="rc-mini"
+                      disabled={blocked}
+                      onClick={() => setGroup(g.usable, false)}
+                    >
                       none
                     </button>
                   </div>
-                  {g.rules.map((r) => (
-                    <label key={r.ruleId} className="rc-rule">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(r.ruleId)}
-                        onChange={() => toggleRule(r.ruleId)}
-                      />
-                      <span className="rc-rule-body">
-                        <span className="rc-rule-title">{r.title}</span>
-                        <span className="rc-rule-cite">{r.citation}</span>
-                      </span>
-                    </label>
-                  ))}
+
+                  {blocked && (
+                    <div className="rc-blocked">
+                      None of these {g.rules.length} apply to <strong>{typeLabel}</strong>
+                      {g.covers.length > 0 && (
+                        <>
+                          {" "}
+                          — they are set to apply to{" "}
+                          <strong>{g.covers.map((c) => c.replace(/_/g, " ")).join(", ")}</strong>
+                        </>
+                      )}
+                      .
+                      {g.key === "sop" && (
+                        <>
+                          {" "}
+                          Change that under <strong>Procedures → Applies to</strong>, or this
+                          document will be reviewed with no conformance check at all.
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {g.rules.map((r) => {
+                    const usable = g.usable.includes(r);
+                    return (
+                      <label
+                        key={r.ruleId}
+                        className={`rc-rule ${usable ? "" : "off"}`}
+                        title={
+                          usable
+                            ? undefined
+                            : `Applies to ${r.appliesTo.join(", ")} — not ${typeLabel}`
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={usable && selected.has(r.ruleId)}
+                          disabled={!usable}
+                          onChange={() => toggleRule(r.ruleId)}
+                        />
+                        <span className="rc-rule-body">
+                          <span className="rc-rule-title">{r.title}</span>
+                          <span className="rc-rule-cite">{r.citation}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               );
             })}
