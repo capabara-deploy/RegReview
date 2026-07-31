@@ -111,10 +111,15 @@ export interface UploadResult {
   warning: string | null;
 }
 
-export interface BatchResult {
+/** One document's slot in a job. Always present; length 1 for a single review. */
+export interface JobResult {
   recordId: string;
   filename: string;
   docId: string | null;
+  status: "pending" | "running" | "complete" | "failed";
+  stepsDone: number;
+  stepsTotal: number;
+  phase: string | null;
   runId?: string;
   findingCount?: number;
   error?: string;
@@ -128,8 +133,7 @@ export interface Job {
   runId?: string;
   findingCount?: number;
   error?: string;
-  /** Present for batch jobs: one entry per document reviewed. */
-  results?: BatchResult[];
+  results: JobResult[];
 }
 
 export interface SopSummary {
@@ -204,6 +208,12 @@ export const api = {
     }),
 
   job: (jobId: string) => json<Job>(`/api/jobs/${jobId}`),
+
+  /** Delete a document and everything derived from it. Destructive. */
+  deleteRecord: (recordId: string) =>
+    json<{ recordId: string; runs: number; findings: number }>(`/api/records/${recordId}`, {
+      method: "DELETE",
+    }),
 
   sops: () => json<SopSummary[]>("/api/sops"),
   sop: (sopId: string) => json<SopDetail>(`/api/sops/${sopId}`),

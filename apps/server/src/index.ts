@@ -6,6 +6,7 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
 import {
+  categoriesForRules,
   config,
   deleteSop,
   detectFormat,
@@ -16,6 +17,7 @@ import {
   ingestSop,
   listSops,
   loadFindings,
+  loadRulesFor,
   migrate,
   RecordType,
   runReview,
@@ -368,6 +370,47 @@ app.post("/api/records", async (request, reply) => {
   });
 });
 
+/**
+ * Delete a document and everything derived from it.
+ *
+ * Destructive and deliberately explicit about it: this removes the document's
+ * runs, its findings, and the `finding_events` audit trail behind those
+ * findings. The counts come back so the UI can say what was actually destroyed
+ * rather than a bare "deleted".
+ *
+ * Rows are removed in dependency order rather than leaning on cascades, because
+ * the cascade rules exist to protect offset integrity when a document is
+ * re-blocked, not to define what deletion means.
+ */
+app.delete("/api/records/:recordId", (request, reply) => {
+  const { recordId } = request.params as { recordId: string };
+  const db = getDb();
+
+  const exists = db.prepare(`SELECT 1 FROM records WHERE record_id = ?`).get(recordId);
+  if (!exists) return reply.code(404).send({ error: "record not found" });
+
+  const counts = {
+    runs: (db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get(recordId) as { n: number }).n,
+    findings: (db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE record_id = ?`).get(recordId) as { n: number }).n,
+  };
+
+  db.transaction(() => {
+    db.prepare(
+      `DELETE FROM finding_events WHERE run_id IN (SELECT run_id FROM runs WHERE record_id = ?)`,
+    ).run(recordId);
+    db.prepare(`DELETE FROM findings WHERE record_id = ?`).run(recordId);
+    db.prepare(`DELETE FROM facts WHERE record_id = ?`).run(recordId);
+    db.prepare(`DELETE FROM runs WHERE record_id = ?`).run(recordId);
+    db.prepare(`DELETE FROM blocks WHERE record_id = ?`).run(recordId);
+    db.prepare(`DELETE FROM records WHERE record_id = ?`).run(recordId);
+  })();
+
+  // The uploaded file itself is left on disk. It is the customer's document and
+  // may be the only copy they handed us; removing the database rows is what the
+  // user asked for, silently destroying their file is not.
+  return { recordId, ...counts };
+});
+
 // ---------------------------------------------------------------------------
 // Running a review (background job)
 // ---------------------------------------------------------------------------
@@ -378,6 +421,22 @@ app.post("/api/records", async (request, reply) => {
  * long-running request, not durable state — the durable result is the run and
  * its findings in the database.
  */
+/** One document's slot in a job. Always present, length 1 for a single review. */
+interface JobResult {
+  recordId: string;
+  filename: string;
+  docId: string | null;
+  status: "pending" | "running" | "complete" | "failed";
+  /** Completed engine steps and the number expected, for a progress bar. */
+  stepsDone: number;
+  stepsTotal: number;
+  /** Human label for the step in flight, e.g. "compliance". */
+  phase: string | null;
+  runId?: string;
+  findingCount?: number;
+  error?: string;
+}
+
 interface Job {
   jobId: string;
   /** The record under review, or the first of them for a batch. */
@@ -388,17 +447,60 @@ interface Job {
   findingCount?: number;
   error?: string;
   startedAt: string;
-  /** Per-record outcomes. Length 1 for a single review, N for a batch. */
-  results?: {
-    recordId: string;
-    filename: string;
-    docId: string | null;
-    runId?: string;
-    findingCount?: number;
-    error?: string;
-  }[];
+  results: JobResult[];
 }
 const jobs = new Map<string, Job>();
+
+/**
+ * How many engine steps a review will report: one per check pass, plus the
+ * verifier and the anchoring stage.
+ */
+function expectedSteps(categories: number): number {
+  return categories + 2;
+}
+
+/**
+ * How many check passes a review will run — four unless it is scoped, in which
+ * case only the passes the selected rules belong to. Mirrors the decision
+ * `runReview` actually makes, so the bar is scaled to the work being done rather
+ * than to a full review that is not happening.
+ */
+function passCountFor(recordType: RecordType, ruleIds: string[]): number {
+  if (ruleIds.length === 0) return 4;
+  const applicable = loadRulesFor(recordType);
+  const scoped = applicable.filter((r) => ruleIds.includes(r.ruleId));
+  return Math.max(1, categoriesForRules(scoped).length);
+}
+
+/**
+ * Advance a document's progress from the engine's own progress lines.
+ *
+ * This reads the engine's human-readable output rather than a structured
+ * channel, which is a deliberate tradeoff: a typed progress event would have to
+ * thread through ReviewEngine and both implementations, and the only consumer is
+ * a progress bar. The failure mode if a message is reworded is that the bar
+ * advances less smoothly — it still reaches completion, because completion is
+ * driven by the job, not by the parsing. Keep it that way.
+ */
+function advance(slot: JobResult, message: string): void {
+  const category = /^(compliance|conformance|completeness|plausibility):/.exec(message);
+  if (category) {
+    slot.phase = category[1]!;
+    slot.stepsDone = Math.min(slot.stepsDone + 1, slot.stepsTotal);
+    return;
+  }
+  if (message.startsWith("verifier dropped")) {
+    slot.phase = "verifying";
+    slot.stepsDone = Math.min(slot.stepsDone + 1, slot.stepsTotal);
+    return;
+  }
+  if (message.startsWith("anchored ")) {
+    slot.phase = "anchoring";
+    slot.stepsDone = Math.min(slot.stepsDone + 1, slot.stepsTotal);
+    return;
+  }
+  if (message.startsWith("consistency:")) slot.phase = "cross-checking";
+}
 
 const StartReviewBody = z.object({
   /** Other record IDs to check cross-document consistency against. */
@@ -443,12 +545,23 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
     if (r) related.push(r);
   }
 
+  const slot: JobResult = {
+    recordId,
+    filename: record.record.filename,
+    docId: record.record.docId,
+    status: "running",
+    stepsDone: 0,
+    stepsTotal: expectedSteps(passCountFor(record.record.recordType, parsed.data.ruleIds)),
+    phase: "starting",
+  };
+
   const job: Job = {
     jobId: randomUUID(),
     recordId,
     status: "running",
     progress: [],
     startedAt: new Date().toISOString(),
+    results: [slot],
   };
   jobs.set(job.jobId, job);
 
@@ -464,6 +577,7 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
         ...(parsed.data.ruleIds.length > 0 ? { ruleIds: parsed.data.ruleIds } : {}),
         onProgress: (m) => {
           job.progress.push(m);
+          advance(slot, m);
           // Bound the log so a long run can't grow it without limit.
           if (job.progress.length > 200) job.progress.splice(0, job.progress.length - 200);
         },
@@ -471,9 +585,17 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
       job.status = "complete";
       job.runId = result.run.runId;
       job.findingCount = result.findings.length;
+      slot.status = "complete";
+      slot.stepsDone = slot.stepsTotal;
+      slot.phase = null;
+      slot.runId = result.run.runId;
+      slot.findingCount = result.findings.length;
     } catch (err) {
       job.status = "failed";
       job.error = err instanceof Error ? err.message : String(err);
+      slot.status = "failed";
+      slot.phase = null;
+      slot.error = job.error;
     }
   })();
 
@@ -535,6 +657,10 @@ app.post("/api/reviews/batch", async (request, reply) => {
       recordId: r.record.recordId,
       filename: r.record.filename,
       docId: r.record.docId,
+      status: "pending" as const,
+      stepsDone: 0,
+      stepsTotal: expectedSteps(passCountFor(r.record.recordType, parsed.data.ruleIds)),
+      phase: null,
     })),
   };
   jobs.set(job.jobId, job);
@@ -543,7 +669,9 @@ app.post("/api/reviews/batch", async (request, reply) => {
     let totalFindings = 0;
     for (const [i, doc] of loaded.entries()) {
       const label = doc.record.docId ?? doc.record.filename;
-      const slot = job.results![i]!;
+      const slot = job.results[i]!;
+      slot.status = "running";
+      slot.phase = "starting";
       job.progress.push(`[${i + 1}/${loaded.length}] ${label}`);
       try {
         const result = await runReview({
@@ -554,16 +682,20 @@ app.post("/api/reviews/batch", async (request, reply) => {
           ...(parsed.data.ruleIds.length > 0 ? { ruleIds: parsed.data.ruleIds } : {}),
           onProgress: (m) => {
             job.progress.push(`    ${m}`);
+            advance(slot, m);
             if (job.progress.length > 400) job.progress.splice(0, job.progress.length - 400);
           },
         });
+        slot.status = "complete";
+        slot.stepsDone = slot.stepsTotal;
+        slot.phase = null;
         slot.runId = result.run.runId;
         slot.findingCount = result.findings.length;
         totalFindings += result.findings.length;
-        job.progress.push(
-          `    -> ${result.findings.length} finding(s)`,
-        );
+        job.progress.push(`    -> ${result.findings.length} finding(s)`);
       } catch (err) {
+        slot.status = "failed";
+        slot.phase = null;
         slot.error = err instanceof Error ? err.message : String(err);
         job.progress.push(`    -> FAILED: ${slot.error}`);
       }

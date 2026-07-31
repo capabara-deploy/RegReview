@@ -15,6 +15,20 @@ import type { Finding, Severity } from "./api";
  * makes it impossible to lose or duplicate text no matter how findings overlap.
  */
 
+/**
+ * Icon plus label, never colour alone — the tier has to survive a colourblind
+ * reviewer and a black-and-white printout of a review meeting handout.
+ *
+ * Lives here rather than beside either component that renders it: the findings
+ * view and the finding panel both need it, and importing it from one into the
+ * other made the module graph circular.
+ */
+export const SEVERITY_MARK: Record<Severity, string> = {
+  high: "▲",
+  medium: "■",
+  low: "●",
+};
+
 export interface Segment {
   text: string;
   charStart: number;

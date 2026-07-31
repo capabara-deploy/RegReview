@@ -154,11 +154,16 @@ export function Procedures({ onChanged }: { onChanged?: () => void }) {
     setError(null);
   };
 
+  // Functional updater: reading appliesTo from the closure means two toggles
+  // dispatched before a re-render both start from the same stale set, and the
+  // second silently discards the first.
   const toggleType = (t: string) => {
-    const next = new Set(appliesTo);
-    if (next.has(t)) next.delete(t);
-    else next.add(t);
-    setAppliesTo(next);
+    setAppliesTo((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
     setDirty(true);
   };
 

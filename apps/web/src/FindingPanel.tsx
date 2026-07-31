@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Finding, type FindingStatus, type FindingEvent, type Rule } from "./api";
-import { SEVERITY_MARK } from "./App";
+import { SEVERITY_MARK } from "./highlight";
 
 /**
  * The detail panel for one finding.

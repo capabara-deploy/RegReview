@@ -1,43 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   type Finding,
   type FindingStatus,
+  type Job,
   type RecordDetail,
   type RecordSummary,
-  type Severity,
 } from "./api";
-import { dominant, segment } from "./highlight";
-import { FindingPanel } from "./FindingPanel";
+import { Findings } from "./Findings";
 import { Procedures } from "./Procedures";
-import { ReviewControls } from "./ReviewControls";
+import { RunReview } from "./RunReview";
 
-type View = "review" | "procedures";
+type Page = "run" | "findings" | "procedures";
 
-const SEVERITIES: Severity[] = ["high", "medium", "low"];
-
-/** Icon plus label, never colour alone — the tier has to survive a colourblind
- *  reviewer and a black-and-white printout of a review meeting handout. */
-export const SEVERITY_MARK: Record<Severity, string> = {
-  high: "▲",
-  medium: "■",
-  low: "●",
-};
-
+/**
+ * The shell: navigation, the record/run the findings view is showing, and the
+ * set of review jobs being watched.
+ *
+ * Jobs are tracked here rather than inside the run page so that navigating to
+ * the findings while a review is in flight does not abandon it. Polling is
+ * centralised for the same reason — one timer for all jobs, stopping only when
+ * none are running.
+ */
 export function App() {
+  const [page, setPage] = useState<Page>("run");
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [record, setRecord] = useState<RecordDetail | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [hiddenSeverities, setHiddenSeverities] = useState<Set<Severity>>(new Set());
-  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
-  const [showResolved, setShowResolved] = useState(true);
-  const [view, setView] = useState<View>("review");
-  const [uploading, setUploading] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
+
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const watched = useRef<Set<string>>(new Set());
+  const timer = useRef<number | null>(null);
 
   const refreshRecords = useCallback(async () => {
     try {
@@ -47,28 +42,15 @@ export function App() {
     }
   }, []);
 
-  useEffect(() => {
-    api
-      .records()
-      .then((rows) => {
-        setRecords(rows);
-        const first = rows.find((r) => r.runs > 0) ?? rows[0];
-        if (first) void openRecord(first.recordId);
-      })
-      .catch((e: Error) => setError(e.message));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const openRecord = useCallback(async (recordId: string) => {
     setError(null);
     try {
       const detail = await api.record(recordId);
       setRecord(detail);
-      setSelected(null);
       // Prefer the newest real review. The offline keyword baseline is a
       // development diagnostic whose findings are deliberately crude, and
-      // defaulting to it would show a reviewer output the product would never
-      // produce.
+      // defaulting to it would show a reviewer output the product never
+      // produces.
       const complete = detail.runs.filter((r) => r.status === "complete");
       const latest =
         complete.find((r) => !r.model.startsWith("keyword-")) ?? complete[0] ?? detail.runs[0];
@@ -84,10 +66,13 @@ export function App() {
     }
   }, []);
 
+  useEffect(() => {
+    void refreshRecords();
+  }, [refreshRecords]);
+
   const selectRun = useCallback(async (id: string) => {
     setError(null);
     setRunId(id);
-    setSelected(null);
     try {
       setFindings(await api.findings(id));
     } catch (e) {
@@ -95,13 +80,35 @@ export function App() {
     }
   }, []);
 
+  /** Open a run's findings, pulling the record fresh so the new run is listed. */
+  const openRun = useCallback(
+    async (newRunId: string) => {
+      try {
+        const findingRows = await api.findings(newRunId);
+        const recordId = findingRows[0]?.recordId;
+        // A run with zero findings carries no record id in its findings, so fall
+        // back to re-reading whatever document is open. Showing nothing would be
+        // indistinguishable from a failure.
+        if (recordId) {
+          setRecord(await api.record(recordId));
+        } else if (record) {
+          setRecord(await api.record(record.recordId));
+        }
+        setRunId(newRunId);
+        setFindings(findingRows);
+        setPage("findings");
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [record],
+  );
+
   const updateStatus = useCallback(
     async (finding: Finding, status: FindingStatus, note?: string) => {
       try {
         const updated = await api.setStatus(finding.runId, finding.findingId, status, note);
-        setFindings((prev) =>
-          prev.map((f) => (f.findingId === updated.findingId ? updated : f)),
-        );
+        setFindings((prev) => prev.map((f) => (f.findingId === updated.findingId ? updated : f)));
       } catch (e) {
         setError((e as Error).message);
       }
@@ -109,75 +116,62 @@ export function App() {
     [],
   );
 
-  const onUpload = useCallback(
-    async (file: File) => {
-      setError(null);
-      setNotice(null);
-      setUploading(true);
-      try {
-        const result = await api.uploadRecord(file, "capa");
-        if (result.warning) setNotice(result.warning);
-        else setNotice(`Uploaded ${result.filename} (${result.format}, ${result.blocks} blocks).`);
-        await refreshRecords();
-        await openRecord(result.recordId);
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setUploading(false);
-        if (fileInput.current) fileInput.current.value = "";
+  const trackJob = useCallback((jobId: string) => {
+    watched.current.add(jobId);
+    setJobs((prev) => [
+      {
+        jobId,
+        recordId: "",
+        status: "running",
+        progress: [],
+        results: [],
+      },
+      ...prev,
+    ]);
+  }, []);
+
+  // One poll loop for every watched job. It stops when nothing is running, so an
+  // idle page makes no requests.
+  useEffect(() => {
+    const anyRunning = jobs.some((j) => j.status === "running");
+    if (!anyRunning) {
+      if (timer.current !== null) {
+        window.clearInterval(timer.current);
+        timer.current = null;
       }
-    },
-    [refreshRecords, openRecord],
-  );
+      return;
+    }
+    if (timer.current !== null) return;
 
-  // A finished review: pull the new runs and jump to the run that was produced.
-  const onReviewComplete = useCallback(
-    async (newRunId: string) => {
-      if (!record) return;
-      const detail = await api.record(record.recordId);
-      setRecord(detail);
-      await selectRun(newRunId);
-      setNotice("Review complete.");
-    },
-    [record, selectRun],
-  );
+    timer.current = window.setInterval(() => {
+      void (async () => {
+        const ids = [...watched.current];
+        const fetched = await Promise.all(
+          ids.map((id) => api.job(id).catch(() => null)),
+        );
+        const alive = fetched.filter((j): j is Job => j !== null);
+        setJobs((prev) =>
+          prev.map((p) => alive.find((a) => a.jobId === p.jobId) ?? p),
+        );
+        // A finished job's document gained a run, so the record list is stale.
+        if (alive.some((j) => j.status !== "running")) {
+          for (const j of alive.filter((x) => x.status !== "running")) {
+            watched.current.delete(j.jobId);
+          }
+          void refreshRecords();
+        }
+      })();
+    }, 1500);
 
-  const categories = useMemo(
-    () => [...new Set(findings.map((f) => f.category))].sort(),
-    [findings],
-  );
+    return () => {
+      if (timer.current !== null) {
+        window.clearInterval(timer.current);
+        timer.current = null;
+      }
+    };
+  }, [jobs, refreshRecords]);
 
-  const visible = useMemo(
-    () =>
-      findings.filter(
-        (f) =>
-          !hiddenSeverities.has(f.severity) &&
-          !hiddenCategories.has(f.category) &&
-          (showResolved || f.status === "open"),
-      ),
-    [findings, hiddenSeverities, hiddenCategories, showResolved],
-  );
-
-  const segments = useMemo(
-    () => (record ? segment(record.normalizedText, visible) : []),
-    [record, visible],
-  );
-
-  const counts = useMemo(() => {
-    const c: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
-    for (const f of findings) c[f.severity]++;
-    return c;
-  }, [findings]);
-
-  const selectedFinding = findings.find((f) => f.findingId === selected) ?? null;
-  const currentRun = record?.runs.find((r) => r.runId === runId);
-
-  const toggle = <T,>(set: Set<T>, value: T): Set<T> => {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    return next;
-  };
+  const runningCount = jobs.filter((j) => j.status === "running").length;
 
   return (
     <div className="app">
@@ -189,212 +183,52 @@ export function App() {
 
         <nav className="viewnav">
           <button
-            className={`viewtab ${view === "review" ? "on" : ""}`}
-            onClick={() => setView("review")}
+            className={`viewtab ${page === "run" ? "on" : ""}`}
+            onClick={() => setPage("run")}
           >
-            Review
+            Run a review
+            {runningCount > 0 && <span className="nav-dot">{runningCount}</span>}
           </button>
           <button
-            className={`viewtab ${view === "procedures" ? "on" : ""}`}
-            onClick={() => setView("procedures")}
+            className={`viewtab ${page === "findings" ? "on" : ""}`}
+            onClick={() => setPage("findings")}
+          >
+            Findings
+          </button>
+          <button
+            className={`viewtab ${page === "procedures" ? "on" : ""}`}
+            onClick={() => setPage("procedures")}
           >
             Procedures
           </button>
         </nav>
-
-        {view === "review" && (
-          <>
-            <select
-              className="record-select"
-              value={record?.recordId ?? ""}
-              onChange={(e) => void openRecord(e.target.value)}
-            >
-              {records.map((r) => (
-                <option key={r.recordId} value={r.recordId}>
-                  {r.docId ?? r.filename} ({r.runs} run{r.runs === 1 ? "" : "s"})
-                </option>
-              ))}
-            </select>
-            {record && record.runs.length > 0 && (
-              <select
-                className="run-select"
-                value={runId ?? ""}
-                onChange={(e) => void selectRun(e.target.value)}
-              >
-                {record.runs.map((r) => (
-                  <option key={r.runId} value={r.runId}>
-                    {new Date(r.startedAt).toLocaleString()} · {r.model} · {r.status}
-                    {r.model.startsWith("keyword-") ? " (baseline)" : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".pdf,.docx,.md,.txt"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void onUpload(f);
-              }}
-            />
-            <button
-              className="upload-btn"
-              disabled={uploading}
-              onClick={() => fileInput.current?.click()}
-            >
-              {uploading ? "Uploading…" : "+ Upload document"}
-            </button>
-          </>
-        )}
       </header>
 
       {error && <div className="error">{error}</div>}
-      {notice && <div className="notice">{notice}</div>}
 
-      {view === "procedures" && <Procedures onChanged={refreshRecords} />}
-
-      {view === "review" && record && (
-        <ReviewControls
-          recordId={record.recordId}
+      {page === "run" && (
+        <RunReview
           records={records}
-          onComplete={(id) => void onReviewComplete(id)}
+          jobs={jobs}
+          onStartJob={trackJob}
+          onRefreshRecords={refreshRecords}
+          onOpenRun={(id) => void openRun(id)}
         />
       )}
 
-      {/* Every run is stamped with the model, prompt version and corpus version.
-          Two findings are only comparable if these match, so they are shown
-          rather than hidden — a reviewer comparing runs needs to know. */}
-      {view === "review" && currentRun && (
-        <div className="provenance">
-          <span>
-            model <code>{currentRun.model}</code>
-          </span>
-          <span>
-            effort <code>{currentRun.effort}</code>
-          </span>
-          <span>
-            prompts <code>{currentRun.promptVersion}</code>
-          </span>
-          <span>
-            corpus <code>{currentRun.corpusVersion}</code>
-          </span>
-        </div>
+      {page === "findings" && (
+        <Findings
+          records={records}
+          record={record}
+          runId={runId}
+          findings={findings}
+          onOpenRecord={(id) => void openRecord(id)}
+          onSelectRun={(id) => void selectRun(id)}
+          onStatus={updateStatus}
+        />
       )}
 
-      {view === "review" && (
-      <div className="filters">
-        <span className="filter-label">Severity</span>
-        {SEVERITIES.map((s) => (
-          <button
-            key={s}
-            className={`chip sev-${s} ${hiddenSeverities.has(s) ? "off" : ""}`}
-            onClick={() => setHiddenSeverities((prev) => toggle(prev, s))}
-            aria-pressed={!hiddenSeverities.has(s)}
-          >
-            <span aria-hidden="true">{SEVERITY_MARK[s]}</span> {s} ({counts[s]})
-          </button>
-        ))}
-
-        {categories.length > 0 && <span className="filter-label">Category</span>}
-        {categories.map((c) => (
-          <button
-            key={c}
-            className={`chip cat ${hiddenCategories.has(c) ? "off" : ""}`}
-            onClick={() => setHiddenCategories((prev) => toggle(prev, c))}
-            aria-pressed={!hiddenCategories.has(c)}
-          >
-            {c}
-          </button>
-        ))}
-
-        <label className="resolved-toggle">
-          <input
-            type="checkbox"
-            checked={showResolved}
-            onChange={(e) => setShowResolved(e.target.checked)}
-          />
-          show accepted / rejected
-        </label>
-
-        <span className="count">
-          {visible.length} of {findings.length} shown
-        </span>
-      </div>
-      )}
-
-      {view === "review" && (
-      <div className="body">
-        <main className="document" aria-label="Document under review">
-          {segments.map((seg, i) => {
-            const top = dominant(seg.findings);
-            if (!top) return <span key={i}>{seg.text}</span>;
-            const isSelected = seg.findings.some((f) => f.findingId === selected);
-            return (
-              <mark
-                key={i}
-                className={
-                  `hl sev-${top.severity} status-${top.status}` +
-                  (isSelected ? " selected" : "")
-                }
-                title={`${top.severity.toUpperCase()} · ${top.category} · ${top.citation}`}
-                onClick={() => setSelected(top.findingId)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setSelected(top.findingId);
-                  }
-                }}
-              >
-                {seg.text}
-                {seg.findings.length > 1 && (
-                  <sup className="overlap" title={`${seg.findings.length} overlapping findings`}>
-                    {seg.findings.length}
-                  </sup>
-                )}
-              </mark>
-            );
-          })}
-        </main>
-
-        <aside className="sidebar">
-          {selectedFinding ? (
-            <FindingPanel
-              finding={selectedFinding}
-              onClose={() => setSelected(null)}
-              onStatus={updateStatus}
-            />
-          ) : (
-            <div className="finding-list">
-              <h2>Findings</h2>
-              {visible.length === 0 && <p className="muted">No findings match the filters.</p>}
-              {visible.map((f, i) => (
-                <button
-                  key={f.findingId}
-                  className={`list-item sev-${f.severity} status-${f.status}`}
-                  onClick={() => setSelected(f.findingId)}
-                >
-                  <div className="list-head">
-                    <span className={`badge sev-${f.severity}`}>
-                      <span aria-hidden="true">{SEVERITY_MARK[f.severity]}</span> {f.severity}
-                    </span>
-                    <span className="list-cat">{f.category}</span>
-                    {f.status !== "open" && <span className="list-status">{f.status}</span>}
-                  </div>
-                  <div className="list-problem">
-                    {i + 1}. {f.problem}
-                  </div>
-                  <div className="list-cite">{f.citation}</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </aside>
-      </div>
-      )}
+      {page === "procedures" && <Procedures onChanged={refreshRecords} />}
     </div>
   );
 }
