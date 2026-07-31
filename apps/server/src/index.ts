@@ -370,6 +370,59 @@ app.post("/api/records", async (request, reply) => {
   });
 });
 
+const RecordPatchBody = z.object({ recordType: RecordType });
+
+/**
+ * Change a document's record type.
+ *
+ * The type decides which rules apply, so getting it wrong means reviewing a risk
+ * management file against CAPA requirements — or, more quietly, against nothing
+ * at all. It is set at upload from a dropdown that is easy to leave on its
+ * default, so it has to be correctable afterwards without deleting the document
+ * and losing its findings.
+ *
+ * Existing runs are left alone. They were produced under whatever rules applied
+ * at the time, and rewriting history to match a later reclassification would
+ * make `runs.corpus_version` a lie. The count is returned so the caller can say
+ * that past runs used the old rule set.
+ */
+app.patch("/api/records/:recordId", (request, reply) => {
+  const { recordId } = request.params as { recordId: string };
+  const parsed = RecordPatchBody.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: `recordType must be one of: ${RecordType.options.join(", ")}`,
+    });
+  }
+
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT record_type FROM records WHERE record_id = ?`)
+    .get(recordId) as { record_type: string } | undefined;
+  if (!row) return reply.code(404).send({ error: "record not found" });
+
+  db.prepare(`UPDATE records SET record_type = ? WHERE record_id = ?`).run(
+    parsed.data.recordType,
+    recordId,
+  );
+
+  const runs = (
+    db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get(recordId) as {
+      n: number;
+    }
+  ).n;
+
+  return {
+    recordId,
+    previousType: row.record_type,
+    recordType: parsed.data.recordType,
+    // How many rules the new type actually brings, so the UI can warn when a
+    // reclassification leaves a document with nothing to check it against.
+    applicableRules: loadRulesFor(parsed.data.recordType).length,
+    priorRuns: runs,
+  };
+});
+
 /**
  * Delete a document and everything derived from it.
  *

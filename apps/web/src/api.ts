@@ -209,6 +209,19 @@ export const api = {
 
   job: (jobId: string) => json<Job>(`/api/jobs/${jobId}`),
 
+  /** Reclassify a document. Changes which rules apply; leaves past runs alone. */
+  setRecordType: (recordId: string, recordType: string) =>
+    json<{
+      recordId: string;
+      previousType: string;
+      recordType: string;
+      applicableRules: number;
+      priorRuns: number;
+    }>(`/api/records/${recordId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ recordType }),
+    }),
+
   /** Delete a document and everything derived from it. Destructive. */
   deleteRecord: (recordId: string) =>
     json<{ recordId: string; runs: number; findings: number }>(`/api/records/${recordId}`, {

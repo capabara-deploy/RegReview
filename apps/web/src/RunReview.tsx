@@ -262,6 +262,36 @@ export function RunReview({
     [uploadType, onRefreshRecords],
   );
 
+  const onRetype = useCallback(
+    async (r: RecordSummary, recordType: string) => {
+      setError(null);
+      setNotice(null);
+      try {
+        const res = await api.setRecordType(r.recordId, recordType);
+        const label = r.docId ?? r.filename;
+        const parts = [
+          `${label} is now a ${recordType.replace(/_/g, " ")} record — ` +
+            `${res.applicableRules} rule(s) apply.`,
+        ];
+        // Past runs were produced under the old type's rules. Saying so matters:
+        // the findings on screen may be measured against requirements that no
+        // longer govern this document.
+        if (res.priorRuns > 0) {
+          parts.push(
+            `Its ${res.priorRuns} existing run(s) were done as a ` +
+              `${res.previousType.replace(/_/g, " ")} record and are unchanged — ` +
+              `re-run to check it against the new rule set.`,
+          );
+        }
+        setNotice(parts.join(" "));
+        await onRefreshRecords();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [onRefreshRecords],
+  );
+
   const onDelete = useCallback(
     async (r: RecordSummary) => {
       const label = r.docId ?? r.filename;
@@ -334,18 +364,20 @@ export function RunReview({
         <div className="rp-head">
           <h2>Documents to review</h2>
           <div className="rp-head-actions">
-            <select
-              className="rp-type"
-              value={uploadType}
-              onChange={(e) => setUploadType(e.target.value)}
-              title="Record type for the next upload"
-            >
-              {RECORD_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
+            <label className="rp-uploadtype">
+              upload as
+              <select
+                className="rp-type"
+                value={uploadType}
+                onChange={(e) => setUploadType(e.target.value)}
+              >
+                {RECORD_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <input
               ref={fileInput}
               type="file"
@@ -382,11 +414,33 @@ export function RunReview({
                     onChange={() => togglePicked(r.recordId)}
                   />
                   <span className="docrow-name">{r.docId ?? r.filename}</span>
-                  <span className="docrow-type">{r.recordType.replace(/_/g, " ")}</span>
-                  <span className="docrow-runs">
-                    {r.runs === 0 ? "never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
-                  </span>
                 </label>
+                {/* Editable, not a badge: the type decides which rules apply, and
+                    a document uploaded under the wrong one is reviewed against
+                    the wrong requirements — or against none. */}
+                <select
+                  className="docrow-type"
+                  value={r.recordType}
+                  title="Document type — decides which requirements apply"
+                  onChange={(e) => void onRetype(r, e.target.value)}
+                >
+                  {/* A controlled select whose value is not among its options
+                      displays the first option instead, so the row would claim a
+                      type the document does not have and the next interaction
+                      would silently commit it. Keep an escape hatch for any
+                      record type this list does not know about. */}
+                  {!RECORD_TYPES.some((t) => t.value === r.recordType) && (
+                    <option value={r.recordType}>{r.recordType.replace(/_/g, " ")}</option>
+                  )}
+                  {RECORD_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="docrow-runs">
+                  {r.runs === 0 ? "never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
+                </span>
                 <button
                   className="docrow-del"
                   title="Delete this document and all its findings"
