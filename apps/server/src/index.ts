@@ -1,8 +1,11 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { z } from "zod";
 import {
@@ -40,9 +43,181 @@ import {
  * model, and this process is the only one permitted to.
  */
 
-const app = Fastify({ logger: { level: "warn" } });
+/**
+ * Deployment mode.
+ *
+ * Local development runs the web app on its own Vite port and proxies `/api`
+ * here, so two origins are in play and CORS has to allow it. A deployed instance
+ * serves the built frontend from this same process, so there is exactly one
+ * origin and cross-origin requests are never legitimate — allowing them would
+ * mean any page on the internet could drive this API using a logged-in
+ * reviewer's credentials.
+ */
+const WEB_ROOT = process.env["REGREVIEW_WEB_ROOT"] ?? "";
+const SERVE_WEB = WEB_ROOT !== "" && existsSync(join(WEB_ROOT, "index.html"));
 
-await app.register(cors, { origin: true });
+const AUTH_USER = process.env["REGREVIEW_AUTH_USER"] ?? "";
+const AUTH_PASSWORD = process.env["REGREVIEW_AUTH_PASSWORD"] ?? "";
+const AUTH_ENABLED = AUTH_PASSWORD !== "";
+
+/**
+ * Refuse to serve customer documents to the internet without a password.
+ *
+ * This instance holds uploaded quality records — among the most confidential
+ * documents a device company owns — and a button that spends money per click.
+ * Defaulting to open when a password is merely absent is how that happens by
+ * accident, so binding to anything other than loopback requires one.
+ */
+const HOST = process.env["HOST"] ?? "127.0.0.1";
+const PUBLIC = HOST !== "127.0.0.1" && HOST !== "localhost";
+if (PUBLIC && !AUTH_ENABLED) {
+  console.error(
+    `Refusing to start: HOST is ${HOST}, which accepts connections from outside\n` +
+      `this machine, but REGREVIEW_AUTH_PASSWORD is not set. This process serves\n` +
+      `uploaded customer documents and can spend money on the model API.\n\n` +
+      `Set REGREVIEW_AUTH_USER and REGREVIEW_AUTH_PASSWORD, or bind to 127.0.0.1.`,
+  );
+  process.exit(1);
+}
+
+const app = Fastify({
+  logger: { level: "warn" },
+  // Behind Fly/Cloudflare the client address arrives in X-Forwarded-For. Without
+  // this, every request looks like it comes from the proxy and the rate limiter
+  // buckets the whole world together.
+  trustProxy: PUBLIC,
+});
+
+// Only needed for the two-origin dev setup; a deployed instance is same-origin.
+if (!SERVE_WEB) {
+  await app.register(cors, { origin: true });
+}
+
+/**
+ * A leaked password on a public URL is a bill, not just an intrusion: a review
+ * costs roughly $0.65 and the button is right there on the page. This bounds the
+ * damage. Set a spend cap on the Anthropic key as well — this limits request
+ * rate, not total spend.
+ */
+await app.register(rateLimit, {
+  max: Number(process.env["REGREVIEW_RATE_LIMIT"] ?? 120),
+  timeWindow: "1 minute",
+});
+
+const SESSION_SECRET = randomUUID();
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) {
+    timingSafeEqual(ab, ab);
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
+}
+
+function makeSessionToken(user: string): string {
+  const h = createHmac("sha256", SESSION_SECRET);
+  h.update(user);
+  return h.digest("hex");
+}
+
+const LOGIN_PAGE = `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RegReview — Sign in</title>
+<style>
+*{box-sizing:border-box;margin:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e4e9;
+  display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#1a1d27;border:1px solid #2a2d37;border-radius:12px;
+  padding:2.5rem;width:100%;max-width:380px}
+h1{font-size:1.25rem;margin-bottom:1.5rem;text-align:center}
+label{display:block;font-size:.85rem;color:#9ca3af;margin-bottom:.25rem}
+input{width:100%;padding:.6rem .75rem;border:1px solid #2a2d37;border-radius:6px;
+  background:#0f1117;color:#e2e4e9;font-size:.95rem;margin-bottom:1rem;outline:none}
+input:focus{border-color:#6366f1}
+button{width:100%;padding:.7rem;border:none;border-radius:6px;
+  background:#6366f1;color:#fff;font-size:.95rem;cursor:pointer;font-weight:500}
+button:hover{background:#4f46e5}
+.err{color:#f87171;font-size:.85rem;text-align:center;margin-bottom:1rem;min-height:1.2em}
+</style></head><body>
+<div class="card">
+<h1>RegReview</h1>
+<div class="err" id="err"></div>
+<form id="f">
+<label for="u">Username</label><input id="u" name="username" autocomplete="username" required>
+<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
+<button type="submit">Sign in</button>
+</form>
+</div>
+<script>
+document.getElementById("f").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const r=await fetch("/api/login",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({username:document.getElementById("u").value,
+      password:document.getElementById("p").value})});
+  if(r.ok){location.href="/"}
+  else{document.getElementById("err").textContent="Invalid credentials"}
+});
+</script></body></html>`;
+
+if (AUTH_ENABLED) {
+  await app.register(cookie);
+
+  app.post("/api/login", async (request, reply) => {
+    const { username, password } = (request.body as any) ?? {};
+    const ok =
+      typeof username === "string" &&
+      typeof password === "string" &&
+      safeEqual(username, AUTH_USER || username) &&
+      safeEqual(password, AUTH_PASSWORD);
+    if (!ok) {
+      return reply.code(401).send({ error: "invalid credentials" });
+    }
+    const token = makeSessionToken(username);
+    reply.setCookie("rr_session", token, {
+      path: "/",
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7,
+    });
+    return { ok: true };
+  });
+
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.url === "/api/login") return;
+    const token = (request.cookies as any)?.rr_session;
+    const expected = makeSessionToken(AUTH_USER);
+    if (!token || !safeEqual(token, expected)) {
+      if (
+        request.url.startsWith("/api/") ||
+        request.headers.accept?.includes("application/json")
+      ) {
+        return reply.code(401).send({ error: "unauthorized" });
+      }
+      reply.type("text/html").code(200).send(LOGIN_PAGE);
+    }
+  });
+}
+
+/**
+ * Record who acted, when identity is available.
+ *
+ * Basic auth gives one shared account, which cannot answer "who looked at this".
+ * Cloudflare Access (or any identity-aware proxy in front) injects the
+ * authenticated email, and logging it is what turns a shared login into an
+ * access record a quality audience can be shown.
+ */
+app.addHook("onRequest", async (request) => {
+  const who = request.headers["cf-access-authenticated-user-email"];
+  if (who && request.method !== "GET") {
+    console.log(`[access] ${who} ${request.method} ${request.url}`);
+  }
+});
+
 await app.register(multipart, {
   // Quality records are large but not enormous; this is generous headroom and a
   // guard against an accidental huge upload wedging the process.
@@ -1029,9 +1204,34 @@ function loadRecord(
   return { record, blocks };
 }
 
+/**
+ * Serve the built reviewer UI from this same process.
+ *
+ * Registered last so it can never shadow an `/api` route, and with `wildcard`
+ * off so unmatched paths fall through to the SPA handler below rather than being
+ * resolved against the filesystem. Both matter: this static root sits behind the
+ * auth hook, and the way that guard gets bypassed is a static handler resolving
+ * a crafted path before the API routes are consulted.
+ */
+if (SERVE_WEB) {
+  await app.register(fastifyStatic, { root: WEB_ROOT, wildcard: false });
+
+  // The UI is a single page; any non-API path is a client route, so hand back
+  // index.html rather than a 404. API paths must still 404 as themselves — a
+  // mistyped endpoint returning HTML is an unusually confusing bug.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.url.startsWith("/api/")) {
+      return reply.code(404).send({ error: "not found" });
+    }
+    return reply.sendFile("index.html");
+  });
+}
+
 const port = config.port;
-await app.listen({ port, host: "127.0.0.1" });
-console.log(`RegReview API on http://127.0.0.1:${port}`);
-console.log(`  POST /api/records            upload a document`);
-console.log(`  POST /api/records/:id/review start a review`);
-console.log(`  GET/POST/PUT/DELETE /api/sops manage procedures`);
+await app.listen({ port, host: HOST });
+
+console.log(`RegReview on http://${HOST}:${port}`);
+console.log(`  web UI    : ${SERVE_WEB ? WEB_ROOT : "not served (run the Vite dev server)"}`);
+console.log(`  auth      : ${AUTH_ENABLED ? `basic auth as "${AUTH_USER || "(any user)"}"` : "DISABLED (loopback only)"}`);
+console.log(`  database  : ${config.dbPath}`);
+console.log(`  uploads   : ${config.uploadDir}`);

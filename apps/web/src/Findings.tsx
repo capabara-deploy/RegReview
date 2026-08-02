@@ -73,11 +73,34 @@ export function Findings({
   const currentRun = record?.runs.find((r) => r.runId === runId);
 
   if (!record) {
+    const reviewed = records.filter((r) => r.runs > 0);
+    if (reviewed.length === 0) {
+      return (
+        <div className="empty-state">
+          <p className="muted">
+            No reviews yet. Upload a document and run a review from the{" "}
+            <strong>Run a review</strong> tab.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="empty-state">
-        <p className="muted">
-          No document open. Upload one and run a review from the <strong>Run a review</strong> tab.
-        </p>
+        <p className="muted">Select a document to view its findings.</p>
+        <div className="record-picker">
+          {reviewed.map((r) => (
+            <button
+              key={r.recordId}
+              className="record-pick-btn"
+              onClick={() => onOpenRecord(r.recordId)}
+            >
+              <span className="rpb-name">{r.docId ?? r.filename}</span>
+              <span className="rpb-meta">
+                {r.recordType} · {r.runs} run{r.runs === 1 ? "" : "s"}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     );
   }

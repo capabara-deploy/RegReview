@@ -1,0 +1,18 @@
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Never let local state or secrets into an image.
+.env
+.env.local
+data/
+uploads/
+seed/
+corpus-cache/
+
+.git
+.github
+.claude
+*.md
+!README.md
