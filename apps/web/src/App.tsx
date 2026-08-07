@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
+  AuthError,
   type Finding,
   type FindingStatus,
   type Job,
@@ -8,6 +9,7 @@ import {
   type RecordSummary,
 } from "./api";
 import { Findings } from "./Findings";
+import { Login } from "./Login";
 import { Procedures } from "./Procedures";
 import { RunReview } from "./RunReview";
 
@@ -23,6 +25,10 @@ type Page = "run" | "findings" | "procedures";
  * none are running.
  */
 export function App() {
+  // undefined while the initial /api/me check is in flight, null when signed
+  // out — kept distinct so the login screen doesn't flash before that check
+  // resolves.
+  const [username, setUsername] = useState<string | null | undefined>(undefined);
   const [page, setPage] = useState<Page>("run");
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [record, setRecord] = useState<RecordDetail | null>(null);
@@ -34,10 +40,22 @@ export function App() {
   const watched = useRef<Set<string>>(new Set());
   const timer = useRef<number | null>(null);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const me = await api.me();
+        setUsername(me.username);
+      } catch {
+        setUsername(null);
+      }
+    })();
+  }, []);
+
   const refreshRecords = useCallback(async () => {
     try {
       setRecords(await api.records());
     } catch (e) {
+      if (e instanceof AuthError) return setUsername(null);
       setError((e as Error).message);
     }
   }, []);
@@ -62,13 +80,14 @@ export function App() {
         setFindings([]);
       }
     } catch (e) {
+      if (e instanceof AuthError) return setUsername(null);
       setError((e as Error).message);
     }
   }, []);
 
   useEffect(() => {
-    void refreshRecords();
-  }, [refreshRecords]);
+    if (username) void refreshRecords();
+  }, [username, refreshRecords]);
 
   /**
    * Re-attach to the server's reviews on load.
@@ -83,6 +102,7 @@ export function App() {
    * server keeps a bounded number of recent jobs; only running ones are polled.
    */
   useEffect(() => {
+    if (!username) return;
     void (async () => {
       try {
         const existing = await api.jobs();
@@ -91,11 +111,12 @@ export function App() {
           if (j.status === "running") watched.current.add(j.jobId);
         }
         setJobs(existing);
-      } catch {
-        // A server that cannot list jobs is not a reason to block the page.
+      } catch (e) {
+        if (e instanceof AuthError) setUsername(null);
+        // Otherwise: a server that cannot list jobs is not a reason to block the page.
       }
     })();
-  }, []);
+  }, [username]);
 
   const selectRun = useCallback(async (id: string) => {
     setError(null);
@@ -103,6 +124,7 @@ export function App() {
     try {
       setFindings(await api.findings(id));
     } catch (e) {
+      if (e instanceof AuthError) return setUsername(null);
       setError((e as Error).message);
     }
   }, []);
@@ -125,6 +147,7 @@ export function App() {
         setFindings(findingRows);
         setPage("findings");
       } catch (e) {
+        if (e instanceof AuthError) return setUsername(null);
         setError((e as Error).message);
       }
     },
@@ -137,6 +160,7 @@ export function App() {
         const updated = await api.setStatus(finding.runId, finding.findingId, status, note);
         setFindings((prev) => prev.map((f) => (f.findingId === updated.findingId ? updated : f)));
       } catch (e) {
+        if (e instanceof AuthError) return setUsername(null);
         setError((e as Error).message);
       }
     },
@@ -200,6 +224,17 @@ export function App() {
 
   const runningCount = jobs.filter((j) => j.status === "running").length;
 
+  if (username === undefined) return null;
+  if (username === null) return <Login onSignedIn={setUsername} />;
+
+  const signOut = async () => {
+    try {
+      await api.logout();
+    } finally {
+      setUsername(null);
+    }
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -229,6 +264,10 @@ export function App() {
             Procedures
           </button>
         </nav>
+
+        <button className="signout-btn" onClick={() => void signOut()}>
+          Sign out ({username})
+        </button>
       </header>
 
       {error && <div className="error">{error}</div>}

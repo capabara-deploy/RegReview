@@ -84,6 +84,87 @@ body {
   max-width: 340px;
 }
 
+/* ---------- sign-in ---------- */
+
+.signout-btn {
+  margin-left: auto;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.signout-btn:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.login-screen {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-card h1 {
+  font-size: 1.1rem;
+  margin: 0 0 1.25rem;
+  text-align: center;
+}
+
+.login-card label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.login-card input {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  margin-bottom: 1rem;
+}
+
+.login-card button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.6rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.login-card button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-error {
+  color: var(--high-line);
+  font-size: 0.85rem;
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
 /* ---------- view nav, upload, review controls ---------- */
 
 .viewnav {

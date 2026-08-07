@@ -1,13 +1,22 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import cookie from "@fastify/cookie";
-import cors from "@fastify/cors";
-import multipart from "@fastify/multipart";
-import rateLimit from "@fastify/rate-limit";
-import fastifyStatic from "@fastify/static";
-import Fastify from "fastify";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import express, { type NextFunction, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
+import multer from "multer";
 import { z } from "zod";
+import {
+  AUTH_ENABLED,
+  createSession,
+  deleteSession,
+  ensureAuthIndexes,
+  getMongoDb,
+  resolveSession,
+  verifyLogin,
+} from "./auth.js";
+import { consumeQuota, ensureQuotaIndexes, initQuota, peekQuota, resetQuota } from "./quota.js";
 import {
   categoriesForRules,
   config,
@@ -41,189 +50,50 @@ import {
  * owns, so the surface that can send them anywhere is kept to one place. It is
  * also why the review itself runs here: a review sends document text to the
  * model, and this process is the only one permitted to.
- */
-
-/**
- * Deployment mode.
  *
- * Local development runs the web app on its own Vite port and proxies `/api`
- * here, so two origins are in play and CORS has to allow it. A deployed instance
- * serves the built frontend from this same process, so there is exactly one
- * origin and cross-origin requests are never legitimate — allowing them would
- * mean any page on the internet could drive this API using a logged-in
- * reviewer's credentials.
+ * This process is a pure JSON API. It does not serve the reviewer UI — that is
+ * a separately deployed static site (apps/web), which talks to this process
+ * across origins. See REGREVIEW_SITE_ORIGIN below for the CORS boundary that
+ * implies.
  */
-const WEB_ROOT = process.env["REGREVIEW_WEB_ROOT"] ?? "";
-const SERVE_WEB = WEB_ROOT !== "" && existsSync(join(WEB_ROOT, "index.html"));
 
-const AUTH_USER = process.env["REGREVIEW_AUTH_USER"] ?? "";
-const AUTH_PASSWORD = process.env["REGREVIEW_AUTH_PASSWORD"] ?? "";
-const AUTH_ENABLED = AUTH_PASSWORD !== "";
+// The logged-in username, once the auth middleware below has run.
+declare global {
+  namespace Express {
+    interface Request {
+      username?: string;
+    }
+  }
+}
+
+const HOST = process.env["HOST"] ?? "127.0.0.1";
+const PORT = config.port;
 
 /**
- * Refuse to serve customer documents to the internet without a password.
+ * Refuse to serve customer documents to the internet without accounts configured.
  *
  * This instance holds uploaded quality records — among the most confidential
  * documents a device company owns — and a button that spends money per click.
- * Defaulting to open when a password is merely absent is how that happens by
- * accident, so binding to anything other than loopback requires one.
+ * Defaulting to open when MONGODB_URI is merely absent is how that happens by
+ * accident, so binding to anything other than loopback requires it.
  */
-const HOST = process.env["HOST"] ?? "127.0.0.1";
 const PUBLIC = HOST !== "127.0.0.1" && HOST !== "localhost";
 if (PUBLIC && !AUTH_ENABLED) {
   console.error(
     `Refusing to start: HOST is ${HOST}, which accepts connections from outside\n` +
-      `this machine, but REGREVIEW_AUTH_PASSWORD is not set. This process serves\n` +
-      `uploaded customer documents and can spend money on the model API.\n\n` +
-      `Set REGREVIEW_AUTH_USER and REGREVIEW_AUTH_PASSWORD, or bind to 127.0.0.1.`,
+      `this machine, but MONGODB_URI is not set. This process serves uploaded\n` +
+      `customer documents and can spend money on the model API.\n\n` +
+      `Set MONGODB_URI and create a reviewer account with "npm run user:create", or\n` +
+      `bind to 127.0.0.1.`,
   );
   process.exit(1);
 }
 
-const app = Fastify({
-  logger: { level: "warn" },
-  // Behind Fly/Cloudflare the client address arrives in X-Forwarded-For. Without
-  // this, every request looks like it comes from the proxy and the rate limiter
-  // buckets the whole world together.
-  trustProxy: PUBLIC,
-});
-
-// Only needed for the two-origin dev setup; a deployed instance is same-origin.
-if (!SERVE_WEB) {
-  await app.register(cors, { origin: true });
-}
-
-/**
- * A leaked password on a public URL is a bill, not just an intrusion: a review
- * costs roughly $0.65 and the button is right there on the page. This bounds the
- * damage. Set a spend cap on the Anthropic key as well — this limits request
- * rate, not total spend.
- */
-await app.register(rateLimit, {
-  max: Number(process.env["REGREVIEW_RATE_LIMIT"] ?? 120),
-  timeWindow: "1 minute",
-});
-
-const SESSION_SECRET = randomUUID();
-
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf8");
-  const bb = Buffer.from(b, "utf8");
-  if (ab.length !== bb.length) {
-    timingSafeEqual(ab, ab);
-    return false;
-  }
-  return timingSafeEqual(ab, bb);
-}
-
-function makeSessionToken(user: string): string {
-  const h = createHmac("sha256", SESSION_SECRET);
-  h.update(user);
-  return h.digest("hex");
-}
-
-const LOGIN_PAGE = `<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RegReview — Sign in</title>
-<style>
-*{box-sizing:border-box;margin:0}
-body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e4e9;
-  display:flex;align-items:center;justify-content:center;min-height:100vh}
-.card{background:#1a1d27;border:1px solid #2a2d37;border-radius:12px;
-  padding:2.5rem;width:100%;max-width:380px}
-h1{font-size:1.25rem;margin-bottom:1.5rem;text-align:center}
-label{display:block;font-size:.85rem;color:#9ca3af;margin-bottom:.25rem}
-input{width:100%;padding:.6rem .75rem;border:1px solid #2a2d37;border-radius:6px;
-  background:#0f1117;color:#e2e4e9;font-size:.95rem;margin-bottom:1rem;outline:none}
-input:focus{border-color:#6366f1}
-button{width:100%;padding:.7rem;border:none;border-radius:6px;
-  background:#6366f1;color:#fff;font-size:.95rem;cursor:pointer;font-weight:500}
-button:hover{background:#4f46e5}
-.err{color:#f87171;font-size:.85rem;text-align:center;margin-bottom:1rem;min-height:1.2em}
-</style></head><body>
-<div class="card">
-<h1>RegReview</h1>
-<div class="err" id="err"></div>
-<form id="f">
-<label for="u">Username</label><input id="u" name="username" autocomplete="username" required>
-<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Sign in</button>
-</form>
-</div>
-<script>
-document.getElementById("f").addEventListener("submit",async e=>{
-  e.preventDefault();
-  const r=await fetch("/api/login",{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({username:document.getElementById("u").value,
-      password:document.getElementById("p").value})});
-  if(r.ok){location.href="/"}
-  else{document.getElementById("err").textContent="Invalid credentials"}
-});
-</script></body></html>`;
-
+await ensureAuthIndexes();
 if (AUTH_ENABLED) {
-  await app.register(cookie);
-
-  app.post("/api/login", async (request, reply) => {
-    const { username, password } = (request.body as any) ?? {};
-    const ok =
-      typeof username === "string" &&
-      typeof password === "string" &&
-      safeEqual(username, AUTH_USER || username) &&
-      safeEqual(password, AUTH_PASSWORD);
-    if (!ok) {
-      return reply.code(401).send({ error: "invalid credentials" });
-    }
-    const token = makeSessionToken(username);
-    reply.setCookie("rr_session", token, {
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7,
-    });
-    return { ok: true };
-  });
-
-  app.addHook("onRequest", async (request, reply) => {
-    if (request.url === "/api/login") return;
-    const token = (request.cookies as any)?.rr_session;
-    const expected = makeSessionToken(AUTH_USER);
-    if (!token || !safeEqual(token, expected)) {
-      if (
-        request.url.startsWith("/api/") ||
-        request.headers.accept?.includes("application/json")
-      ) {
-        return reply.code(401).send({ error: "unauthorized" });
-      }
-      reply.type("text/html").code(200).send(LOGIN_PAGE);
-    }
-  });
+  initQuota(await getMongoDb());
+  await ensureQuotaIndexes();
 }
-
-/**
- * Record who acted, when identity is available.
- *
- * Basic auth gives one shared account, which cannot answer "who looked at this".
- * Cloudflare Access (or any identity-aware proxy in front) injects the
- * authenticated email, and logging it is what turns a shared login into an
- * access record a quality audience can be shown.
- */
-app.addHook("onRequest", async (request) => {
-  const who = request.headers["cf-access-authenticated-user-email"];
-  if (who && request.method !== "GET") {
-    console.log(`[access] ${who} ${request.method} ${request.url}`);
-  }
-});
-
-await app.register(multipart, {
-  // Quality records are large but not enormous; this is generous headroom and a
-  // guard against an accidental huge upload wedging the process.
-  limits: { fileSize: 50 * 1024 * 1024, files: 1 },
-});
-
 migrate();
 
 /**
@@ -258,6 +128,156 @@ migrate();
 const uploadDir = join(config.uploadDir);
 mkdirSync(uploadDir, { recursive: true });
 
+const app = express();
+
+// Behind a reverse proxy (Caddy/nginx on the droplet, or a DO load balancer),
+// the client address arrives in X-Forwarded-For. Without this, every request
+// looks like it comes from the proxy and the rate limiter buckets the whole
+// world together, and `secure` cookies can't tell the connection was really TLS.
+if (PUBLIC) app.set("trust proxy", 1);
+
+/**
+ * The site (apps/web) and this API are always two origins now — there is no
+ * mode where this process serves the frontend. `credentials: true` plus an
+ * explicit origin (not "*") is what lets the browser attach the session
+ * cookie to a cross-origin request; a wildcard origin cannot be combined with
+ * credentials at all, by design of the CORS spec.
+ */
+const SITE_ORIGINS = (process.env["REGREVIEW_SITE_ORIGIN"] ?? "http://localhost:5174")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: SITE_ORIGINS,
+    credentials: true,
+  }),
+);
+
+/**
+ * A leaked password on a public URL is a bill, not just an intrusion: a review
+ * costs roughly $0.65 and the button is right there on the page. This bounds
+ * the damage. Set a spend cap on the Anthropic key as well — this limits
+ * request rate, not total spend.
+ */
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    limit: Number(process.env["REGREVIEW_RATE_LIMIT"] ?? 120),
+    standardHeaders: true,
+    legacyHeaders: false,
+  }),
+);
+
+// Tighter than the general limit: nothing else should let an attacker spend
+// this many guesses per minute against an account's password.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => !AUTH_ENABLED,
+});
+
+app.use(express.json());
+app.use(cookieParser());
+
+const SESSION_COOKIE = "rr_session";
+
+function setSessionCookie(res: Response, token: string): void {
+  res.cookie(SESSION_COOKIE, token, {
+    path: "/",
+    httpOnly: true,
+    // Secure cookies are dropped by the browser over plain HTTP, so this can
+    // only be true where TLS is guaranteed — which PUBLIC (an intentionally
+    // non-loopback HOST) is standing in for. SameSite=None is required for a
+    // cross-site cookie at all, but only browsers will honor it over HTTPS.
+    secure: PUBLIC,
+    sameSite: PUBLIC ? "none" : "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+}
+
+const LoginBody = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
+if (AUTH_ENABLED) {
+  app.post("/api/login", loginLimiter, async (req, res) => {
+    const parsed = LoginBody.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "username and password are required" });
+    }
+    const username = await verifyLogin(parsed.data.username, parsed.data.password);
+    if (!username) {
+      return res.status(401).json({ error: "invalid credentials" });
+    }
+    const token = await createSession(username);
+    setSessionCookie(res, token);
+    return res.json({ ok: true, username });
+  });
+
+  app.post("/api/logout", async (req: Request, res: Response) => {
+    const token = req.cookies?.[SESSION_COOKIE];
+    if (token) await deleteSession(token);
+    res.clearCookie(SESSION_COOKIE, { path: "/" });
+    return res.json({ ok: true });
+  });
+
+  app.get("/api/me", async (req: Request, res: Response) => {
+    // Not behind the auth middleware (registered below), so check directly.
+    const token = req.cookies?.[SESSION_COOKIE];
+    const username = token ? await resolveSession(token) : null;
+    if (!username) return res.status(401).json({ error: "unauthorized" });
+    const quota = await peekQuota(username);
+    return res.json({ username, reviewsRemainingThisHour: quota.remaining });
+  });
+
+  /**
+   * Reset a user's hourly quota, for testing. Guarded by a separate env
+   * password rather than a logged-in session — this exists to unstick a demo
+   * or test account, not to be part of the reviewer-facing product, so it
+   * intentionally doesn't need a DB-backed admin account of its own.
+   */
+  const ADMIN_PASSWORD = process.env["REGREVIEW_ADMIN_PASSWORD"] ?? "";
+  const ResetLimitBody = z.object({ username: z.string().min(1) });
+  app.post("/api/admin/reset-limit", async (req: Request, res: Response) => {
+    if (!ADMIN_PASSWORD) return res.status(404).json({ error: "not found" });
+
+    const authHeader = req.header("authorization") ?? "";
+    const provided = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+    const expected = Buffer.from(ADMIN_PASSWORD);
+    const actual = Buffer.from(provided);
+    const ok = expected.length === actual.length && timingSafeEqual(expected, actual);
+    if (!ok) return res.status(401).json({ error: "unauthorized" });
+
+    const parsed = ResetLimitBody.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "username is required" });
+
+    await resetQuota(parsed.data.username);
+    return res.json({ ok: true });
+  });
+
+  app.use(async (req: Request, res: Response, next: NextFunction) => {
+    const token = req.cookies?.[SESSION_COOKIE];
+    const username = token ? await resolveSession(token) : null;
+    if (!username) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    req.username = username;
+    next();
+  });
+}
+
+/** Record who acted, now that a real login means "who" is always known. */
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  if (req.username && req.method !== "GET") {
+    console.log(`[access] ${req.username} ${req.method} ${req.originalUrl}`);
+  }
+  next();
+});
+
 interface RecordRow {
   record_id: string;
   filename: string;
@@ -291,7 +311,7 @@ interface BlockRow {
 }
 
 /** Documents that have at least one completed run, newest activity first. */
-app.get("/api/records", () => {
+app.get("/api/records", (_req, res) => {
   const db = getDb();
   const rows = db
     .prepare(
@@ -305,26 +325,28 @@ app.get("/api/records", () => {
     )
     .all() as (Omit<RecordRow, "normalized_text"> & { runs: number; last_run_at: string | null })[];
 
-  return rows.map((r) => ({
-    recordId: r.record_id,
-    filename: r.filename,
-    recordType: r.record_type,
-    docId: r.doc_id,
-    revision: r.revision,
-    runs: r.runs,
-    lastRunAt: r.last_run_at,
-  }));
+  res.json(
+    rows.map((r) => ({
+      recordId: r.record_id,
+      filename: r.filename,
+      recordType: r.record_type,
+      docId: r.doc_id,
+      revision: r.revision,
+      runs: r.runs,
+      lastRunAt: r.last_run_at,
+    })),
+  );
 });
 
 /** The document text, its blocks, and its runs. */
-app.get("/api/records/:recordId", (request, reply) => {
-  const { recordId } = request.params as { recordId: string };
+app.get("/api/records/:recordId", (req, res) => {
+  const { recordId } = req.params;
   const db = getDb();
 
   const record = db.prepare(`SELECT * FROM records WHERE record_id = ?`).get(recordId) as
     | RecordRow
     | undefined;
-  if (!record) return reply.code(404).send({ error: "record not found" });
+  if (!record) return res.status(404).json({ error: "record not found" });
 
   const blocks = db
     .prepare(
@@ -337,7 +359,7 @@ app.get("/api/records/:recordId", (request, reply) => {
     .prepare(`SELECT * FROM runs WHERE record_id = ? ORDER BY started_at DESC`)
     .all(recordId) as RunRow[];
 
-  return {
+  res.json({
     recordId: record.record_id,
     filename: record.filename,
     recordType: record.record_type,
@@ -366,12 +388,11 @@ app.get("/api/records/:recordId", (request, reply) => {
       // renders exactly like a document with nothing wrong in it.
       error: r.error,
     })),
-  };
+  });
 });
 
-app.get("/api/runs/:runId/findings", (request) => {
-  const { runId } = request.params as { runId: string };
-  return loadFindings(runId);
+app.get("/api/runs/:runId/findings", (req, res) => {
+  res.json(loadFindings(req.params.runId));
 });
 
 const PatchBody = z.object({
@@ -387,18 +408,18 @@ const PatchBody = z.object({
  * `finding_events`, which is never updated or deleted — that append-only log is
  * the Part 11 groundwork.
  */
-app.patch("/api/runs/:runId/findings/:findingId", (request, reply) => {
-  const { runId, findingId } = request.params as { runId: string; findingId: string };
-  const parsed = PatchBody.safeParse(request.body);
+app.patch("/api/runs/:runId/findings/:findingId", (req, res) => {
+  const { runId, findingId } = req.params;
+  const parsed = PatchBody.safeParse(req.body);
   if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid body", detail: parsed.error.issues });
+    return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
 
   const db = getDb();
   const exists = db
     .prepare(`SELECT 1 FROM findings WHERE run_id = ? AND finding_id = ?`)
     .get(runId, findingId);
-  if (!exists) return reply.code(404).send({ error: "finding not found" });
+  if (!exists) return res.status(404).json({ error: "finding not found" });
 
   setFindingStatus({
     runId,
@@ -409,19 +430,21 @@ app.patch("/api/runs/:runId/findings/:findingId", (request, reply) => {
   });
 
   const updated = loadFindings(runId).find((f: Finding) => f.findingId === findingId);
-  return updated;
+  res.json(updated);
 });
 
 /** The audit trail for one finding. */
-app.get("/api/runs/:runId/findings/:findingId/events", (request) => {
-  const { runId, findingId } = request.params as { runId: string; findingId: string };
+app.get("/api/runs/:runId/findings/:findingId/events", (req, res) => {
+  const { runId, findingId } = req.params;
   const db = getDb();
-  return db
-    .prepare(
-      `SELECT event_id, event_type, actor, note, occurred_at
-         FROM finding_events WHERE run_id = ? AND finding_id = ? ORDER BY event_id`,
-    )
-    .all(runId, findingId);
+  res.json(
+    db
+      .prepare(
+        `SELECT event_id, event_type, actor, note, occurred_at
+           FROM finding_events WHERE run_id = ? AND finding_id = ? ORDER BY event_id`,
+      )
+      .all(runId, findingId),
+  );
 });
 
 interface RuleRow {
@@ -458,12 +481,11 @@ function mapRule(row: RuleRow) {
  * FDA citation frequency inherited through each rule's CFR crosswalk. The
  * customer's editable procedures are served separately from /api/sops.
  */
-app.get("/api/rules", (request) => {
+app.get("/api/rules", (req, res) => {
   // ?include=all adds the customer's own SOP clauses. The reference library in
   // the Procedures view wants only the shipped corpus; the review rule picker
   // wants everything selectable, including the customer's procedures.
-  const { include } = request.query as { include?: string };
-  const withSops = include === "all";
+  const withSops = req.query["include"] === "all";
 
   const db = getDb();
   const rows = db
@@ -475,12 +497,12 @@ app.get("/api/rules", (request) => {
         ORDER BY source, frequency_percentile DESC, citation_frequency DESC`,
     )
     .all() as RuleRow[];
-  return rows.map(mapRule);
+  res.json(rows.map(mapRule));
 });
 
 /** The rule behind a finding, so the reviewer can read the requirement in full. */
-app.get("/api/rules/:ruleId", (request, reply) => {
-  const { ruleId } = request.params as { ruleId: string };
+app.get("/api/rules/:ruleId", (req, res) => {
+  const { ruleId } = req.params;
   const db = getDb();
   const row = db.prepare(`SELECT * FROM rules WHERE rule_id = ?`).get(ruleId) as
     | {
@@ -494,8 +516,8 @@ app.get("/api/rules/:ruleId", (request, reply) => {
         frequency_percentile: number;
       }
     | undefined;
-  if (!row) return reply.code(404).send({ error: "rule not found" });
-  return {
+  if (!row) return res.status(404).json({ error: "rule not found" });
+  res.json({
     ruleId: row.rule_id,
     source: row.source,
     citation: row.citation,
@@ -504,7 +526,7 @@ app.get("/api/rules/:ruleId", (request, reply) => {
     harmLinked: row.harm_linked === 1,
     citationFrequency: row.citation_frequency,
     frequencyPercentile: row.frequency_percentile,
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -518,6 +540,14 @@ function safeStoredName(filename: string): string {
   return `${Date.now()}-${randomUUID().slice(0, 8)}-${base}`;
 }
 
+// Files are buffered in memory before being written under `uploadDir` by hand
+// (rather than using multer's disk storage) so the on-disk name stays under
+// our control — see safeStoredName.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+});
+
 /**
  * Upload a record to review.
  *
@@ -527,44 +557,38 @@ function safeStoredName(filename: string): string {
  * legacy .doc) is rejected at upload rather than surfacing later as an empty
  * review that reads like a clean result.
  */
-app.post("/api/records", async (request, reply) => {
-  const uploaded = await request.file();
-  if (!uploaded) return reply.code(400).send({ error: "no file in request" });
+app.post("/api/records", upload.single("file"), async (req, res) => {
+  const uploaded = req.file;
+  if (!uploaded) return res.status(400).json({ error: "no file in request" });
 
-  if (!detectFormat(uploaded.filename)) {
-    return reply.code(415).send({
-      error: `unsupported file type: ${extname(uploaded.filename) || "(none)"}. ` +
+  if (!detectFormat(uploaded.originalname)) {
+    return res.status(415).json({
+      error: `unsupported file type: ${extname(uploaded.originalname) || "(none)"}. ` +
         `Supported: .pdf, .docx, .md, .txt`,
     });
   }
 
-  // recordType may accompany the file as a multipart field.
-  const typeField = uploaded.fields["recordType"];
-  const rawType =
-    typeField && !Array.isArray(typeField) && "value" in typeField
-      ? String(typeField.value)
-      : "capa";
-  const parsedType = RecordType.safeParse(rawType);
+  const parsedType = RecordType.safeParse(req.body["recordType"] ?? "capa");
   const recordType = parsedType.success ? parsedType.data : "capa";
 
-  const storedPath = join(uploadDir, safeStoredName(uploaded.filename));
-  writeFileSync(storedPath, await uploaded.toBuffer());
+  const storedPath = join(uploadDir, safeStoredName(uploaded.originalname));
+  writeFileSync(storedPath, uploaded.buffer);
 
   let extracted;
   try {
     extracted = await extractRecord({ path: storedPath, recordType });
   } catch (err) {
-    return reply.code(422).send({
+    return res.status(422).json({
       error: err instanceof Error ? err.message : "could not read the document",
     });
   }
 
   // Show the original filename, not the collision-proofed on-disk name. The
   // stored path keeps the prefixed name; only the display label is cleaned.
-  extracted.record.filename = basename(uploaded.filename);
+  extracted.record.filename = basename(uploaded.originalname);
   saveRecord(extracted.record, extracted.blocks);
 
-  return reply.code(201).send({
+  res.status(201).json({
     recordId: extracted.record.recordId,
     filename: extracted.record.filename,
     recordType: extracted.record.recordType,
@@ -594,11 +618,11 @@ const RecordPatchBody = z.object({ recordType: RecordType });
  * make `runs.corpus_version` a lie. The count is returned so the caller can say
  * that past runs used the old rule set.
  */
-app.patch("/api/records/:recordId", (request, reply) => {
-  const { recordId } = request.params as { recordId: string };
-  const parsed = RecordPatchBody.safeParse(request.body);
+app.patch("/api/records/:recordId", (req, res) => {
+  const { recordId } = req.params;
+  const parsed = RecordPatchBody.safeParse(req.body);
   if (!parsed.success) {
-    return reply.code(400).send({
+    return res.status(400).json({
       error: `recordType must be one of: ${RecordType.options.join(", ")}`,
     });
   }
@@ -607,7 +631,7 @@ app.patch("/api/records/:recordId", (request, reply) => {
   const row = db
     .prepare(`SELECT record_type FROM records WHERE record_id = ?`)
     .get(recordId) as { record_type: string } | undefined;
-  if (!row) return reply.code(404).send({ error: "record not found" });
+  if (!row) return res.status(404).json({ error: "record not found" });
 
   db.prepare(`UPDATE records SET record_type = ? WHERE record_id = ?`).run(
     parsed.data.recordType,
@@ -620,7 +644,7 @@ app.patch("/api/records/:recordId", (request, reply) => {
     }
   ).n;
 
-  return {
+  res.json({
     recordId,
     previousType: row.record_type,
     recordType: parsed.data.recordType,
@@ -628,7 +652,7 @@ app.patch("/api/records/:recordId", (request, reply) => {
     // reclassification leaves a document with nothing to check it against.
     applicableRules: loadRulesFor(parsed.data.recordType).length,
     priorRuns: runs,
-  };
+  });
 });
 
 /**
@@ -643,12 +667,12 @@ app.patch("/api/records/:recordId", (request, reply) => {
  * the cascade rules exist to protect offset integrity when a document is
  * re-blocked, not to define what deletion means.
  */
-app.delete("/api/records/:recordId", (request, reply) => {
-  const { recordId } = request.params as { recordId: string };
+app.delete("/api/records/:recordId", (req, res) => {
+  const { recordId } = req.params;
   const db = getDb();
 
   const exists = db.prepare(`SELECT 1 FROM records WHERE record_id = ?`).get(recordId);
-  if (!exists) return reply.code(404).send({ error: "record not found" });
+  if (!exists) return res.status(404).json({ error: "record not found" });
 
   const counts = {
     runs: (db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get(recordId) as { n: number }).n,
@@ -669,7 +693,7 @@ app.delete("/api/records/:recordId", (request, reply) => {
   // The uploaded file itself is left on disk. It is the customer's document and
   // may be the only copy they handed us; removing the database rows is what the
   // user asked for, silently destroying their file is not.
-  return { recordId, ...counts };
+  res.json({ recordId, ...counts });
 });
 
 // ---------------------------------------------------------------------------
@@ -779,25 +803,37 @@ const StartReviewBody = z.object({
   ruleIds: z.array(z.string()).default([]),
 });
 
-app.post("/api/records/:recordId/review", async (request, reply) => {
-  const { recordId } = request.params as { recordId: string };
-  const parsed = StartReviewBody.safeParse(request.body ?? {});
+app.post("/api/records/:recordId/review", async (req, res) => {
+  const { recordId } = req.params;
+  const parsed = StartReviewBody.safeParse(req.body ?? {});
   if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid body", detail: parsed.error.issues });
+    return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
 
   const db = getDb();
   const record = loadRecord(db, recordId);
-  if (!record) return reply.code(404).send({ error: "record not found" });
+  if (!record) return res.status(404).json({ error: "record not found" });
 
   // A model review with no credential fails deep in the engine with a confusing
   // error; catch it at the door.
   if (!parsed.data.offline && !process.env["ANTHROPIC_API_KEY"] && !process.env["ANTHROPIC_AUTH_TOKEN"]) {
-    return reply.code(412).send({
+    return res.status(412).json({
       error:
         "no Anthropic credential configured on the server. Set ANTHROPIC_API_KEY " +
         "in the server's environment, or run an offline review.",
     });
+  }
+
+  if (AUTH_ENABLED && !parsed.data.offline) {
+    const quota = await consumeQuota(req.username!, 1);
+    if (!quota.ok) {
+      return res.status(429).json({
+        error: `hourly review limit reached (${quota.limit}/hour). Try again after ${quota.resetAt}.`,
+        limit: quota.limit,
+        remaining: quota.remaining,
+        resetAt: quota.resetAt,
+      });
+    }
   }
 
   const related = [];
@@ -861,7 +897,7 @@ app.post("/api/records/:recordId/review", async (request, reply) => {
     }
   })();
 
-  return reply.code(202).send({ jobId: job.jobId });
+  res.status(202).json({ jobId: job.jobId });
 });
 
 const BatchReviewBody = z.object({
@@ -896,14 +932,14 @@ const BatchReviewBody = z.object({
  * error, and the job completes with a mix of successes and failures rather than
  * discarding work already paid for.
  */
-app.post("/api/reviews/batch", async (request, reply) => {
-  const parsed = BatchReviewBody.safeParse(request.body ?? {});
+app.post("/api/reviews/batch", async (req, res) => {
+  const parsed = BatchReviewBody.safeParse(req.body ?? {});
   if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid body", detail: parsed.error.issues });
+    return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
 
   if (!parsed.data.offline && !process.env["ANTHROPIC_API_KEY"] && !process.env["ANTHROPIC_AUTH_TOKEN"]) {
-    return reply.code(412).send({
+    return res.status(412).json({
       error:
         "no Anthropic credential configured on the server. Set ANTHROPIC_API_KEY " +
         "in the server's environment, or run an offline review.",
@@ -917,7 +953,19 @@ app.post("/api/reviews/batch", async (request, reply) => {
     if (r) loaded.push(r);
   }
   if (loaded.length === 0) {
-    return reply.code(404).send({ error: "none of the requested records were found" });
+    return res.status(404).json({ error: "none of the requested records were found" });
+  }
+
+  if (AUTH_ENABLED && !parsed.data.offline) {
+    const quota = await consumeQuota(req.username!, loaded.length);
+    if (!quota.ok) {
+      return res.status(429).json({
+        error: `hourly review limit reached (${quota.limit}/hour): this batch of ${loaded.length} would exceed it. Try again after ${quota.resetAt}.`,
+        limit: quota.limit,
+        remaining: quota.remaining,
+        resetAt: quota.resetAt,
+      });
+    }
   }
 
   // Documents to check every reviewed record against. A record is never its own
@@ -999,14 +1047,13 @@ app.post("/api/reviews/batch", async (request, reply) => {
     job.findingCount = totalFindings;
   })();
 
-  return reply.code(202).send({ jobId: job.jobId, records: loaded.length });
+  res.status(202).json({ jobId: job.jobId, records: loaded.length });
 });
 
-app.get("/api/jobs/:jobId", (request, reply) => {
-  const { jobId } = request.params as { jobId: string };
-  const job = jobs.get(jobId);
-  if (!job) return reply.code(404).send({ error: "job not found" });
-  return job;
+app.get("/api/jobs/:jobId", (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "job not found" });
+  res.json(job);
 });
 
 /**
@@ -1021,9 +1068,9 @@ app.get("/api/jobs/:jobId", (request, reply) => {
  * Jobs are progress for a long-running request, not durable state. They die with
  * the process; the durable result is the run and its findings in the database.
  */
-app.get("/api/jobs", () =>
-  [...jobs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
-);
+app.get("/api/jobs", (_req, res) => {
+  res.json([...jobs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
+});
 
 /**
  * Keep the job map from growing without bound over a long-lived server. Running
@@ -1043,13 +1090,12 @@ function pruneJobs(): void {
 // Managing the customer's procedures (SOPs)
 // ---------------------------------------------------------------------------
 
-app.get("/api/sops", () => listSops());
+app.get("/api/sops", (_req, res) => res.json(listSops()));
 
-app.get("/api/sops/:sopId", (request, reply) => {
-  const { sopId } = request.params as { sopId: string };
-  const sop = getSop(sopId);
-  if (!sop) return reply.code(404).send({ error: "procedure not found" });
-  return sop;
+app.get("/api/sops/:sopId", (req, res) => {
+  const sop = getSop(req.params.sopId);
+  if (!sop) return res.status(404).json({ error: "procedure not found" });
+  res.json(sop);
 });
 
 const SopTextBody = z.object({
@@ -1066,39 +1112,31 @@ const SopTextBody = z.object({
  * text (below) immediately changes what conformance means, which is the point of
  * making it editable in the first place.
  */
-app.post("/api/sops", async (request, reply) => {
-  const contentType = request.headers["content-type"] ?? "";
-
-  if (contentType.startsWith("multipart/")) {
-    const uploaded = await request.file();
-    if (!uploaded) return reply.code(400).send({ error: "no file in request" });
-    if (!detectFormat(uploaded.filename)) {
-      return reply.code(415).send({ error: "unsupported file type for a procedure" });
+app.post("/api/sops", upload.single("file"), async (req, res) => {
+  if (req.file) {
+    const uploaded = req.file;
+    if (!detectFormat(uploaded.originalname)) {
+      return res.status(415).json({ error: "unsupported file type for a procedure" });
     }
-    const appliesField = uploaded.fields["appliesTo"];
-    const appliesRaw =
-      appliesField && !Array.isArray(appliesField) && "value" in appliesField
-        ? String(appliesField.value)
-        : "capa";
-    const appliesTo = parseAppliesTo(appliesRaw);
+    const appliesTo = parseAppliesTo(String(req.body["appliesTo"] ?? "capa"));
 
-    const storedPath = join(uploadDir, safeStoredName(uploaded.filename));
-    writeFileSync(storedPath, await uploaded.toBuffer());
+    const storedPath = join(uploadDir, safeStoredName(uploaded.originalname));
+    writeFileSync(storedPath, uploaded.buffer);
     // Reuse format parsing so a .docx procedure becomes text before clause
     // extraction runs on it.
     const extracted = await extractRecord({ path: storedPath, recordType: "unknown" });
     const result = ingestSop({
-      filename: basename(uploaded.filename),
+      filename: basename(uploaded.originalname),
       storedPath,
       raw: extracted.record.normalizedText,
       appliesTo,
     });
-    return reply.code(201).send(summarizeIngest(result));
+    return res.status(201).json(summarizeIngest(result));
   }
 
-  const parsed = SopTextBody.safeParse(request.body);
+  const parsed = SopTextBody.safeParse(req.body);
   if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid body", detail: parsed.error.issues });
+    return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
   const storedPath = join(uploadDir, safeStoredName(parsed.data.filename));
   writeFileSync(storedPath, parsed.data.text, "utf8");
@@ -1108,7 +1146,7 @@ app.post("/api/sops", async (request, reply) => {
     raw: parsed.data.text,
     appliesTo: parsed.data.appliesTo,
   });
-  return reply.code(201).send(summarizeIngest(result));
+  res.status(201).json(summarizeIngest(result));
 });
 
 const SopEditBody = z.object({
@@ -1117,30 +1155,29 @@ const SopEditBody = z.object({
 });
 
 /** Edit a procedure in place — new text and/or which record types it governs. */
-app.put("/api/sops/:sopId", (request, reply) => {
-  const { sopId } = request.params as { sopId: string };
-  const parsed = SopEditBody.safeParse(request.body);
+app.put("/api/sops/:sopId", (req, res) => {
+  const { sopId } = req.params;
+  const parsed = SopEditBody.safeParse(req.body);
   if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid body", detail: parsed.error.issues });
+    return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
   if (parsed.data.text === undefined && parsed.data.appliesTo === undefined) {
-    return reply.code(400).send({ error: "nothing to update: provide text and/or appliesTo" });
+    return res.status(400).json({ error: "nothing to update: provide text and/or appliesTo" });
   }
-  if (!getSop(sopId)) return reply.code(404).send({ error: "procedure not found" });
+  if (!getSop(sopId)) return res.status(404).json({ error: "procedure not found" });
 
   const result = updateSop({
     sopDocumentId: sopId,
     ...(parsed.data.text !== undefined ? { raw: parsed.data.text } : {}),
     ...(parsed.data.appliesTo !== undefined ? { appliesTo: parsed.data.appliesTo } : {}),
   });
-  return summarizeIngest(result);
+  res.json(summarizeIngest(result));
 });
 
-app.delete("/api/sops/:sopId", (request, reply) => {
-  const { sopId } = request.params as { sopId: string };
-  const removed = deleteSop(sopId);
-  if (!removed) return reply.code(404).send({ error: "procedure not found" });
-  return reply.code(204).send();
+app.delete("/api/sops/:sopId", (req, res) => {
+  const removed = deleteSop(req.params.sopId);
+  if (!removed) return res.status(404).json({ error: "procedure not found" });
+  res.status(204).end();
 });
 
 function parseAppliesTo(raw: string): RecordType[] {
@@ -1204,34 +1241,24 @@ function loadRecord(
   return { record, blocks };
 }
 
-/**
- * Serve the built reviewer UI from this same process.
- *
- * Registered last so it can never shadow an `/api` route, and with `wildcard`
- * off so unmatched paths fall through to the SPA handler below rather than being
- * resolved against the filesystem. Both matter: this static root sits behind the
- * auth hook, and the way that guard gets bypassed is a static handler resolving
- * a crafted path before the API routes are consulted.
- */
-if (SERVE_WEB) {
-  await app.register(fastifyStatic, { root: WEB_ROOT, wildcard: false });
+// Pure API: an unmatched path is just a 404, never HTML — there is no SPA
+// fallback to hand back, because this process never serves the frontend.
+app.use((_req, res) => {
+  res.status(404).json({ error: "not found" });
+});
 
-  // The UI is a single page; any non-API path is a client route, so hand back
-  // index.html rather than a 404. API paths must still 404 as themselves — a
-  // mistyped endpoint returning HTML is an unusually confusing bug.
-  app.setNotFoundHandler((request, reply) => {
-    if (request.url.startsWith("/api/")) {
-      return reply.code(404).send({ error: "not found" });
-    }
-    return reply.sendFile("index.html");
-  });
-}
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error(err);
+  if (err instanceof multer.MulterError) {
+    return res.status(413).json({ error: err.message });
+  }
+  res.status(500).json({ error: "internal error" });
+});
 
-const port = config.port;
-await app.listen({ port, host: HOST });
-
-console.log(`RegReview on http://${HOST}:${port}`);
-console.log(`  web UI    : ${SERVE_WEB ? WEB_ROOT : "not served (run the Vite dev server)"}`);
-console.log(`  auth      : ${AUTH_ENABLED ? `basic auth as "${AUTH_USER || "(any user)"}"` : "DISABLED (loopback only)"}`);
-console.log(`  database  : ${config.dbPath}`);
-console.log(`  uploads   : ${config.uploadDir}`);
+app.listen(PORT, HOST, () => {
+  console.log(`RegReview API on http://${HOST}:${PORT}`);
+  console.log(`  auth      : ${AUTH_ENABLED ? "Mongo accounts" : "DISABLED (loopback only)"}`);
+  console.log(`  site      : ${SITE_ORIGINS.join(", ")}`);
+  console.log(`  database  : ${config.dbPath}`);
+  console.log(`  uploads   : ${config.uploadDir}`);
+});

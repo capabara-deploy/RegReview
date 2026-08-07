@@ -29,6 +29,7 @@
     "eval": "npm run build:core && npm run -w @regreview/eval eval",
     "dev:server": "npm run build:core && npm run -w @regreview/server dev",
     "dev:web": "npm run -w @regreview/web dev",
+    "user:create": "node --env-file-if-exists=.env --import tsx apps/server/src/cli/createUser.ts",
     "diff:runs": "npm run build:core && npm run -w @regreview/corpus diff:runs",
     "sop": "node --env-file-if-exists=.env --import tsx packages/core/src/cli/ingestSop.ts",
     "rules:report": "npm run build:core && npm run -w @regreview/corpus rules:report"

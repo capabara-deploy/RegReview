@@ -1,17 +1,23 @@
-# RegReview — single container serving the API and the reviewer UI.
+# RegReview — the API container.
 #
-# One process, one origin, one port. The browser never talks to the model API
-# directly, and in a deployment it never talks to a second origin either.
+# This process is the only one that holds an Anthropic credential and the only
+# one that talks to the database. The reviewer UI (apps/web) is a separately
+# deployed static site (DigitalOcean App Platform) that calls this API
+# cross-origin — see REGREVIEW_SITE_ORIGIN in .env.example — so nothing here
+# builds or serves it.
 
 # ---------------------------------------------------------------------------
-# Build: compile the server, bundle the web app, and seed the rule corpus.
+# Build: compile the server and seed the rule corpus.
 # ---------------------------------------------------------------------------
 FROM node:24-slim AS build
 
 WORKDIR /app
 
 # Install with the lockfile before copying sources so a source-only change does
-# not re-resolve the dependency tree.
+# not re-resolve the dependency tree. apps/web's package.json is still copied
+# in even though this image never builds it — npm workspaces validates the
+# lockfile against every workspace member's package.json, so `npm ci` fails
+# without it present.
 COPY package.json package-lock.json ./
 COPY packages/core/package.json      packages/core/
 COPY packages/corpus/package.json    packages/corpus/
@@ -23,8 +29,7 @@ RUN npm ci
 COPY . .
 
 RUN npm run build:core \
- && npx tsc -b apps/server \
- && npm run -w @regreview/web build
+ && npx tsc -b apps/server
 
 # Seed the corpus into an image-baked database.
 #
@@ -59,7 +64,6 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/packages/core/dist  packages/core/dist
 COPY --from=build /app/apps/server/dist    apps/server/dist
-COPY --from=build /app/apps/web/dist       apps/web/dist
 COPY --from=build /app/seed/regreview.db   seed/regreview.db
 COPY docker-entrypoint.sh                  ./
 
@@ -67,7 +71,6 @@ COPY docker-entrypoint.sh                  ./
 # the image layer — a redeploy must not wipe a reviewer's audit trail.
 ENV REGREVIEW_DB=/data/regreview.db \
     REGREVIEW_UPLOAD_DIR=/data/uploads \
-    REGREVIEW_WEB_ROOT=/app/apps/web/dist \
     HOST=0.0.0.0 \
     PORT=8787
 

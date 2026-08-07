@@ -89,11 +89,19 @@ export interface FindingEvent {
   occurred_at: string;
 }
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+// The API is a separately deployed origin now (see apps/server), so every
+// request needs an absolute URL and `credentials: "include"` — without the
+// latter the browser will not attach the session cookie to a cross-origin
+// request at all, and the API will see every call as logged out.
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
+
+async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
     ...init,
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
+  if (res.status === 401) throw new AuthError();
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `${res.status} ${res.statusText}`);
@@ -101,6 +109,15 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   // 204 No Content has no body.
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Thrown when the API rejects a request as unauthenticated — the caller
+ *  should send the user back to the login screen rather than show this as a
+ *  generic error. */
+export class AuthError extends Error {
+  constructor() {
+    super("not signed in");
+  }
 }
 
 export interface UploadResult {
@@ -160,6 +177,14 @@ export interface SopDetail {
 }
 
 export const api = {
+  me: () => json<{ username: string }>("/api/me"),
+  login: (username: string, password: string) =>
+    json<{ ok: true; username: string }>("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => json<{ ok: true }>("/api/logout", { method: "POST" }),
+
   records: () => json<RecordSummary[]>("/api/records"),
   record: (recordId: string) => json<RecordDetail>(`/api/records/${recordId}`),
   findings: (runId: string) => json<Finding[]>(`/api/runs/${runId}/findings`),
@@ -180,7 +205,12 @@ export const api = {
     const form = new FormData();
     form.append("recordType", recordType);
     form.append("file", file);
-    const res = await fetch("/api/records", { method: "POST", body: form });
+    const res = await fetch(`${API_URL}/api/records`, {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    });
+    if (res.status === 401) throw new AuthError();
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       throw new Error(body.error ?? `${res.status} ${res.statusText}`);
