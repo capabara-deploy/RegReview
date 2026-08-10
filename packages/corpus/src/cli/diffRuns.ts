@@ -10,7 +10,7 @@
  *   npx tsx src/cli/diffRuns.ts <runIdA> <runIdB>
  *   npx tsx src/cli/diffRuns.ts --latest 2      (the two most recent runs)
  */
-import { getDb, migrate } from "@regreview/core";
+import { getCustomerDb, migrateCustomer } from "@regreview/core";
 
 interface Row {
   finding_id: string;
@@ -22,30 +22,30 @@ interface Row {
   confidence: string;
 }
 
-function findingsOf(runId: string): Map<string, Row> {
-  const rows = getDb()
+async function findingsOf(runId: string): Promise<Map<string, Row>> {
+  const rows = await getCustomerDb()
     .prepare(
       `SELECT finding_id, severity, category, rule_id, problem, quote, confidence
          FROM findings WHERE run_id = ? ORDER BY char_start`,
     )
-    .all(runId) as Row[];
+    .all<Row>(runId);
   return new Map(rows.map((r) => [r.finding_id, r]));
 }
 
-function main(): void {
-  migrate();
-  const db = getDb();
+async function main(): Promise<void> {
+  await migrateCustomer();
+  const db = getCustomerDb();
   const argv = process.argv.slice(2);
 
   let runA: string | undefined;
   let runB: string | undefined;
 
   if (argv[0] === "--latest") {
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT run_id FROM runs WHERE status = 'complete' ORDER BY started_at DESC LIMIT 2`,
       )
-      .all() as { run_id: string }[];
+      .all<{ run_id: string }>();
     // Oldest of the two first, so "added" reads in chronological order.
     runB = rows[0]?.run_id;
     runA = rows[1]?.run_id;
@@ -59,16 +59,16 @@ function main(): void {
     return;
   }
 
-  const a = findingsOf(runA);
-  const b = findingsOf(runB);
+  const a = await findingsOf(runA);
+  const b = await findingsOf(runB);
 
   const meta = (runId: string) =>
-    db.prepare(`SELECT model, effort, prompt_version FROM runs WHERE run_id = ?`).get(runId) as
-      | { model: string; effort: string; prompt_version: string }
-      | undefined;
+    db
+      .prepare(`SELECT model, effort, prompt_version FROM runs WHERE run_id = ?`)
+      .get<{ model: string; effort: string; prompt_version: string }>(runId);
 
-  console.log(`A = ${runA}  (${a.size} findings)  ${JSON.stringify(meta(runA))}`);
-  console.log(`B = ${runB}  (${b.size} findings)  ${JSON.stringify(meta(runB))}`);
+  console.log(`A = ${runA}  (${a.size} findings)  ${JSON.stringify(await meta(runA))}`);
+  console.log(`B = ${runB}  (${b.size} findings)  ${JSON.stringify(await meta(runB))}`);
 
   const onlyA = [...a.values()].filter((r) => !b.has(r.finding_id));
   const onlyB = [...b.values()].filter((r) => !a.has(r.finding_id));
@@ -96,4 +96,4 @@ function main(): void {
   show("ONLY IN B", onlyB);
 }
 
-main();
+await main();

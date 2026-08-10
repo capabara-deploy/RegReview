@@ -69,11 +69,37 @@ function configuredPath(envVar: string, fallback: string): string {
   return isAbsolute(value) ? value : resolve(REPO_ROOT, value);
 }
 
+/**
+ * Read a required Neon connection string.
+ *
+ * Thrown lazily (only when a DB is actually opened) rather than at import
+ * time, so CLIs and tests that never touch that particular database don't
+ * need every connection string set.
+ */
+function requiredDatabaseUrl(envVar: string): string {
+  const value = process.env[envVar];
+  if (!value) {
+    throw new Error(`${envVar} is not set. Add it to .env first.`);
+  }
+  return value;
+}
+
 export const config = {
   model: process.env["REGREVIEW_MODEL"] ?? DEFAULT_MODEL,
   effort: process.env["REGREVIEW_EFFORT"] ?? DEFAULT_EFFORT,
-  dbPath: configuredPath("REGREVIEW_DB", "./data/regreview.db"),
+  // Uploaded files (original bytes, not extracted text) stay on local disk
+  // deliberately — see the confidentiality note in db/index.ts. This is the
+  // one piece of customer content this migration does not move to Neon.
   uploadDir: configuredPath("REGREVIEW_UPLOAD_DIR", "./data/uploads"),
   corpusCache: configuredPath("REGREVIEW_CORPUS_CACHE", "./corpus-cache"),
   port: Number(process.env["PORT"] ?? 8787),
+  get corpusDatabaseUrl(): string {
+    return requiredDatabaseUrl("NEON_DATABASE_URL");
+  },
+  get customerDatabaseUrl(): string {
+    return requiredDatabaseUrl("NEON_CUSTOMER_DATABASE_URL");
+  },
+  get sopsDatabaseUrl(): string {
+    return requiredDatabaseUrl("NEON_SOPS_DATABASE_URL");
+  },
 } as const;

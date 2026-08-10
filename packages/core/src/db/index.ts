@@ -1,36 +1,49 @@
-import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { config } from "../config.js";
+import { PgDb } from "./pgDb.js";
 
-export type Db = Database.Database;
-
-let cached: Db | undefined;
+export type Db = PgDb;
 
 /**
- * Open (and memoize) the local SQLite database.
+ * Three separate Neon Postgres databases, split by data sensitivity:
  *
- * Local-first is a security decision, not a convenience one: the documents this
- * tool reads are among the most confidential a device company owns, and the
- * Fresenius interviewee was explicit that hosting would need to be on their
- * infrastructure rather than ours.
+ *  - corpus: public regulatory reference data (21 CFR text, FDA citation
+ *    frequencies, the hand-authored/public rule corpus). No customer content.
+ *  - customer: uploaded records, extracted blocks/facts, and every run and
+ *    finding derived from them. Findings embed verbatim quotes from the
+ *    customer's document, so this is customer content, same as records.
+ *  - sops: uploaded SOPs and the rules derived from them. Also customer
+ *    content, kept in its own database rather than folded into `customer`.
  *
- * better-sqlite3 rather than the built-in `node:sqlite` because the latter is
- * still flagged experimental ("might change at any time"), which is a poor
- * foundation for a tool that will eventually need to survive a customer's
- * computer system validation process.
+ * The confidential-document reasoning that used to justify a purely local
+ * SQLite file (see git history) now lives one level up: instead of "never
+ * leaves this machine," it's "customer content lives in customer/sops,
+ * never in corpus, and the app never needs all three to answer one query
+ * except when merging the public and SOP-derived halves of the rule set —
+ * see loadRulesFor in store.ts."
  */
-export function getDb(path = config.dbPath): Db {
-  if (cached) return cached;
-  mkdirSync(dirname(path), { recursive: true });
-  const db = new Database(path);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  cached = db;
-  return db;
+
+let corpus: PgDb | undefined;
+let customer: PgDb | undefined;
+let sops: PgDb | undefined;
+
+export function getCorpusDb(): PgDb {
+  if (!corpus) corpus = new PgDb(config.corpusDatabaseUrl);
+  return corpus;
 }
 
-export function closeDb(): void {
-  cached?.close();
-  cached = undefined;
+export function getCustomerDb(): PgDb {
+  if (!customer) customer = new PgDb(config.customerDatabaseUrl);
+  return customer;
+}
+
+export function getSopsDb(): PgDb {
+  if (!sops) sops = new PgDb(config.sopsDatabaseUrl);
+  return sops;
+}
+
+export async function closeAllDbs(): Promise<void> {
+  await Promise.all([corpus?.end(), customer?.end(), sops?.end()]);
+  corpus = undefined;
+  customer = undefined;
+  sops = undefined;
 }

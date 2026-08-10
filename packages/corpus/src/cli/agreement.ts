@@ -7,10 +7,10 @@
  *
  *   npx tsx src/cli/agreement.ts <runIdA> <runIdB>
  */
-import { getDb, loadFindings, migrate, runAgreement } from "@regreview/core";
+import { getCustomerDb, loadFindings, migrateCustomer, runAgreement } from "@regreview/core";
 
-function main(): void {
-  migrate();
+async function main(): Promise<void> {
+  await migrateCustomer();
   const [runA, runB] = process.argv.slice(2);
   if (!runA || !runB) {
     console.error("usage: agreement <runIdA> <runIdB>");
@@ -18,18 +18,18 @@ function main(): void {
     return;
   }
 
-  const db = getDb();
+  const db = getCustomerDb();
   const meta = (id: string) =>
-    db.prepare(`SELECT model, effort, prompt_version FROM runs WHERE run_id = ?`).get(id) as
-      | { model: string; effort: string; prompt_version: string }
-      | undefined;
+    db
+      .prepare(`SELECT model, effort, prompt_version FROM runs WHERE run_id = ?`)
+      .get<{ model: string; effort: string; prompt_version: string }>(id);
 
-  const a = loadFindings(runA);
-  const b = loadFindings(runB);
+  const a = await loadFindings(runA);
+  const b = await loadFindings(runB);
   const cmp = runAgreement(a, b);
 
-  console.log(`A ${runA}  ${cmp.countA} findings  ${JSON.stringify(meta(runA))}`);
-  console.log(`B ${runB}  ${cmp.countB} findings  ${JSON.stringify(meta(runB))}\n`);
+  console.log(`A ${runA}  ${cmp.countA} findings  ${JSON.stringify(await meta(runA))}`);
+  console.log(`B ${runB}  ${cmp.countB} findings  ${JSON.stringify(await meta(runB))}\n`);
   // Three levels, loosest first. The loosest is the one a reviewer means by
   // "did it find the same problems"; the stricter two say how consistently
   // those problems were localized and phrased.
@@ -69,4 +69,4 @@ function main(): void {
   list("Only in B", cmp.onlyB);
 }
 
-main();
+await main();

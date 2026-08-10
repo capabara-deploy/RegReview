@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { config } from "./config.js";
-import { getDb, type Db } from "./db/index.js";
+import { getCustomerDb, type Db } from "./db/index.js";
 import { blockContaining, locateQuote } from "./extract/text.js";
 import type { Block, Fact, RecordDoc } from "./types.js";
 
@@ -323,37 +323,32 @@ export async function extractFacts(
   };
 }
 
-export function saveFacts(recordId: string, facts: Fact[], db: Db = getDb()): void {
-  const clear = db.prepare(`DELETE FROM facts WHERE record_id = ?`);
-  const insert = db.prepare(
-    `INSERT INTO facts (fact_id, record_id, block_id, kind, subject, value, char_start, char_end)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(fact_id) DO UPDATE SET
-       value = excluded.value, subject = excluded.subject`,
-  );
-  db.transaction(() => {
-    clear.run(recordId);
+export async function saveFacts(
+  recordId: string,
+  facts: Fact[],
+  db: Db = getCustomerDb(),
+): Promise<void> {
+  await db.transaction(async () => {
+    await db.prepare(`DELETE FROM facts WHERE record_id = ?`).run(recordId);
     for (const f of facts) {
-      insert.run(
-        f.factId,
-        f.recordId,
-        f.blockId,
-        f.kind,
-        f.subject,
-        f.value,
-        f.charStart,
-        f.charEnd,
-      );
+      await db
+        .prepare(
+          `INSERT INTO facts (fact_id, record_id, block_id, kind, subject, value, char_start, char_end)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(fact_id) DO UPDATE SET
+             value = excluded.value, subject = excluded.subject`,
+        )
+        .run(f.factId, f.recordId, f.blockId, f.kind, f.subject, f.value, f.charStart, f.charEnd);
     }
   })();
 }
 
-export function loadFacts(recordIds: string[], db: Db = getDb()): Fact[] {
+export async function loadFacts(recordIds: string[], db: Db = getCustomerDb()): Promise<Fact[]> {
   if (recordIds.length === 0) return [];
   const placeholders = recordIds.map(() => "?").join(",");
-  const rows = db
+  const rows = await db
     .prepare(`SELECT * FROM facts WHERE record_id IN (${placeholders}) ORDER BY record_id, kind`)
-    .all(...recordIds) as Record<string, unknown>[];
+    .all<Record<string, unknown>>(...recordIds);
 
   return rows.map((r) => ({
     factId: r["fact_id"] as string,

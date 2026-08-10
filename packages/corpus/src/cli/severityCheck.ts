@@ -6,7 +6,7 @@
  * information and a quality reviewer stops trusting it — which costs us the one
  * asset we cannot rebuild. Run this after changing severity.ts or the corpus.
  */
-import { deriveSeverity, getDb, migrate, type Severity } from "@regreview/core";
+import { deriveSeverity, getCorpusDb, migrateCorpus, type Severity } from "@regreview/core";
 
 interface RuleRow {
   rule_id: string;
@@ -15,15 +15,15 @@ interface RuleRow {
   frequency_percentile: number | null;
 }
 
-function main(): void {
-  migrate();
-  const db = getDb();
-  const rules = db
+async function main(): Promise<void> {
+  await migrateCorpus();
+  const db = getCorpusDb();
+  const rules = await db
     .prepare(
       `SELECT rule_id, citation_frequency, harm_linked, frequency_percentile
          FROM rules ORDER BY citation_frequency DESC`,
     )
-    .all() as RuleRow[];
+    .all<RuleRow>();
 
   if (rules.length === 0) {
     console.log("No rules. Run `npm run ingest:rules` first.");
@@ -93,4 +93,4 @@ function main(): void {
   );
 }
 
-main();
+await main();

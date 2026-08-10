@@ -1,5 +1,13 @@
 import { XMLParser } from "fast-xml-parser";
-import { CORPUS_VERSION, getDb, migrate } from "@regreview/core";
+import { CORPUS_VERSION, getCorpusDb, migrateCorpus } from "@regreview/core";
+import {
+  ECFR_XML_PARSER_OPTIONS,
+  collectSections,
+  findPartNode,
+  normalizeWhitespace,
+  textOf,
+  type SectionRow,
+} from "../ecfrXml.js";
 import { fetchCached } from "../fetch.js";
 import { CFR_PART_820 } from "../sources.js";
 
@@ -25,114 +33,6 @@ import { CFR_PART_820 } from "../sources.js";
 
 const XML_ACCEPT = "application/xml,text/xml,*/*";
 
-/** eCFR returns GPO-style XML: DIV5=part, DIV6=subpart, DIV8=section. */
-interface EcfrNode {
-  "@_TYPE"?: string;
-  "@_N"?: string;
-  HEAD?: unknown;
-  P?: unknown;
-  DIV6?: EcfrNode | EcfrNode[];
-  DIV8?: EcfrNode | EcfrNode[];
-  [key: string]: unknown;
-}
-
-function asArray<T>(value: T | T[] | undefined): T[] {
-  if (value === undefined) return [];
-  return Array.isArray(value) ? value : [value];
-}
-
-/**
- * Flatten a parsed node's text content.
- *
- * eCFR paragraphs contain inline markup (<I>, <E>, citations), so the parser is
- * configured to preserve text nodes and we join them here rather than trying to
- * model every inline element.
- */
-function textOf(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  if (Array.isArray(value)) return value.map(textOf).join("\n");
-  if (typeof value === "object") {
-    // "#text" holds the node's own text; other keys are child elements.
-    return Object.entries(value as Record<string, unknown>)
-      .filter(([k]) => !k.startsWith("@_"))
-      .map(([, v]) => textOf(v))
-      .join(" ");
-  }
-  return "";
-}
-
-/**
- * Decode XML character references.
- *
- * eCFR uses numeric references liberally — a part heading arrives as
- * "PART 820&#x2014;QUALITY MANAGEMENT SYSTEM REGULATION". fast-xml-parser
- * resolves named entities but leaves these, and storing the raw reference means
- * a reviewer eventually sees `&#x2014;` in the middle of a citation.
- */
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
-function normalizeWhitespace(s: string): string {
-  return decodeEntities(s).replace(/ /g, " ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-interface SectionRow {
-  section: string;
-  subpart: string | null;
-  heading: string;
-  body: string;
-  reserved: boolean;
-}
-
-/** Walk DIV5 -> DIV6 -> DIV8 collecting sections. */
-function collectSections(part: EcfrNode): SectionRow[] {
-  const out: SectionRow[] = [];
-
-  const pushSection = (node: EcfrNode, subpart: string | null): void => {
-    const heading = normalizeWhitespace(textOf(node.HEAD));
-    const body = normalizeWhitespace(textOf(node.P));
-    // eCFR marks removed sections by putting "[Reserved]" in the heading.
-    const reserved = /\[reserved\]/i.test(heading) || (body === "" && /\[reserved\]/i.test(heading));
-    out.push({
-      section: node["@_N"] ?? heading.split(/\s+/)[0] ?? "?",
-      subpart,
-      heading,
-      body,
-      reserved,
-    });
-  };
-
-  // Sections can sit directly under the part as well as under a subpart.
-  for (const s of asArray(part.DIV8)) pushSection(s, null);
-
-  for (const subpartNode of asArray(part.DIV6)) {
-    const subpartLabel = normalizeWhitespace(textOf(subpartNode.HEAD)) || null;
-    for (const s of asArray(subpartNode.DIV8)) pushSection(s, subpartLabel);
-    // A wholly reserved subpart has a heading but no sections; record it so we
-    // can show that a range went away rather than silently having no row.
-    if (asArray(subpartNode.DIV8).length === 0 && subpartLabel) {
-      out.push({
-        section: subpartNode["@_N"] ?? subpartLabel,
-        subpart: subpartLabel,
-        heading: subpartLabel,
-        body: "",
-        reserved: /\[reserved\]/i.test(subpartLabel),
-      });
-    }
-  }
-
-  return out;
-}
-
 async function ingestDate(label: string, date: string, force: boolean): Promise<SectionRow[]> {
   const buf = await fetchCached(CFR_PART_820.urlFor(date), {
     cacheKey: `ecfr-part820-${date}.xml`,
@@ -140,62 +40,31 @@ async function ingestDate(label: string, date: string, force: boolean): Promise<
     ...(force ? { force: true } : {}),
   });
 
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: "@_",
-    // Keep text alongside child elements so inline markup doesn't drop content.
-    textNodeName: "#text",
-    trimValues: true,
-    parseTagValue: false,
-    isArray: (name) => name === "DIV6" || name === "DIV8" || name === "P",
-  });
-
+  const parser = new XMLParser(ECFR_XML_PARSER_OPTIONS);
   const doc = parser.parse(buf.toString("utf8")) as Record<string, unknown>;
 
-  // Find the DIV5 for the part, wherever it sits in the returned envelope.
-  const findPart = (node: unknown): EcfrNode | undefined => {
-    if (!node || typeof node !== "object") return undefined;
-    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-      if (key === "DIV5") {
-        const candidates = asArray(value as EcfrNode | EcfrNode[]);
-        const match = candidates.find((c) => c["@_N"] === "820") ?? candidates[0];
-        if (match) return match;
-      }
-      const nested = findPart(value);
-      if (nested) return nested;
-    }
-    return undefined;
-  };
-
-  const part = findPart(doc);
+  const part = findPartNode(doc, "820");
   if (!part) throw new Error(`${label}: could not locate DIV5 for Part 820 in the eCFR response`);
 
   const partTitle = normalizeWhitespace(textOf(part.HEAD));
   const sections = collectSections(part);
 
-  const db = getDb();
-  const insert = db.prepare(
-    `INSERT INTO cfr_sections
-       (cfr_section_id, as_of_date, part, subpart, section, heading, body, reserved)
-     VALUES (?, ?, '820', ?, ?, ?, ?, ?)
-     ON CONFLICT(as_of_date, section) DO UPDATE SET
-       subpart  = excluded.subpart,
-       heading  = excluded.heading,
-       body     = excluded.body,
-       reserved = excluded.reserved`,
-  );
+  const db = getCorpusDb();
 
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const s of sections) {
-      insert.run(
-        `${date}|${s.section}`,
-        date,
-        s.subpart,
-        s.section,
-        s.heading,
-        s.body,
-        s.reserved ? 1 : 0,
-      );
+      await db
+        .prepare(
+          `INSERT INTO cfr_sections
+             (cfr_section_id, as_of_date, part, subpart, section, heading, body, reserved)
+           VALUES (?, ?, '820', ?, ?, ?, ?, ?)
+           ON CONFLICT(as_of_date, section) DO UPDATE SET
+             subpart  = excluded.subpart,
+             heading  = excluded.heading,
+             body     = excluded.body,
+             reserved = excluded.reserved`,
+        )
+        .run(`${date}|${s.section}`, date, s.subpart, s.section, s.heading, s.body, s.reserved);
     }
   })();
 
@@ -211,7 +80,7 @@ async function ingestDate(label: string, date: string, force: boolean): Promise<
 
 async function main(): Promise<void> {
   const force = process.argv.includes("--force");
-  migrate();
+  await migrateCorpus();
 
   console.log(`Ingesting 21 CFR Part 820 (corpus ${CORPUS_VERSION}).\n`);
 

@@ -391,14 +391,14 @@ export class ClaudeReviewEngine implements ReviewEngine {
 
     for (const doc of all) {
       // Reuse stored facts when the document has not changed.
-      const existing = loadFacts([doc.record.recordId]);
+      const existing = await loadFacts([doc.record.recordId]);
       if (existing.length > 0) {
         this.onProgress(`consistency: ${doc.record.docId ?? doc.record.filename} - ` +
           `${existing.length} fact(s) from cache`);
         continue;
       }
       const extracted = await extractFacts(doc, this.client, this.model);
-      saveFacts(doc.record.recordId, extracted.facts);
+      await saveFacts(doc.record.recordId, extracted.facts);
       stats.uncachedInputTokens = (stats.uncachedInputTokens ?? 0) + extracted.inputTokens;
       stats.outputTokens = (stats.outputTokens ?? 0) + extracted.outputTokens;
       this.onProgress(
@@ -410,7 +410,7 @@ export class ClaudeReviewEngine implements ReviewEngine {
       );
     }
 
-    const facts = loadFacts(all.map((d) => d.record.recordId));
+    const facts = await loadFacts(all.map((d) => d.record.recordId));
     const discrepancies = findDiscrepancies(facts);
     this.onProgress(
       `consistency: ${facts.length} fact(s) across ${all.length} document(s) -> ` +

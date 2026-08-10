@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { migrate } from "../db/migrate.js";
+import { migrateSops } from "../db/migrate.js";
 import { ingestSop, listSops } from "../sop.js";
 import { RecordType } from "../types.js";
 
@@ -14,12 +14,12 @@ import { RecordType } from "../types.js";
  *   npm run sop -- <file> [--applies-to capa,complaint] [--list]
  */
 
-function main(): void {
-  migrate();
+async function main(): Promise<void> {
+  await migrateSops();
   const argv = process.argv.slice(2);
 
   if (argv.includes("--list") || argv.length === 0) {
-    const sops = listSops();
+    const sops = await listSops();
     if (sops.length === 0) {
       console.log(
         "No procedures loaded. The conformance pass will be skipped on every review.\n\n" +
@@ -67,7 +67,7 @@ function main(): void {
     });
 
   const absolute = resolve(path);
-  const result = ingestSop({
+  const result = await ingestSop({
     filename: basename(absolute),
     storedPath: absolute,
     raw: readFileSync(absolute, "utf8"),
@@ -94,4 +94,4 @@ function main(): void {
   );
 }
 
-main();
+await main();

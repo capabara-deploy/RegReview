@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { CORPUS_VERSION } from "./config.js";
-import { getDb, type Db } from "./db/index.js";
+import { getCustomerDb, getSopsDb, type Db } from "./db/index.js";
 import { normalizeText, sha256Hex } from "./extract/text.js";
 import type { RecordType, Rule } from "./types.js";
 
@@ -19,8 +19,9 @@ import type { RecordType, Rule } from "./types.js";
  * asks. A tool that checks only the regulation is checking half the problem, and
  * it is the half every competitor also checks.
  *
- * These rules are the customer's confidential content. They are stored locally,
- * scoped to the customer, and never redistributed — see NOTICE.md.
+ * These rules are the customer's confidential content: stored in the sops
+ * database (never the corpus database), scoped to the customer, and never
+ * redistributed — see NOTICE.md.
  */
 
 export interface SopDocument {
@@ -181,7 +182,7 @@ export interface SopIngestResult {
  * procedure against records it does not cover. Both erode trust; the second
  * erodes it faster.
  */
-export function ingestSop(
+export async function ingestSop(
   args: {
     filename: string;
     storedPath: string;
@@ -195,8 +196,8 @@ export function ingestSop(
      */
     sopDocumentId?: string;
   },
-  db: Db = getDb(),
-): SopIngestResult {
+  db: Db = getSopsDb(),
+): Promise<SopIngestResult> {
   const normalizedText = normalizeText(args.raw);
   const meta = extractSopMetadata(normalizedText);
   const sopDocumentId =
@@ -221,70 +222,54 @@ export function ingestSop(
 
   const clauses = extractClauses(normalizedText);
 
-  const insertDoc = db.prepare(
-    `INSERT INTO sop_documents
-       (sop_document_id, filename, stored_path, sha256, title, doc_id, revision,
-        effective_date, normalized_text, uploaded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(sop_document_id) DO UPDATE SET
-       filename        = excluded.filename,
-       stored_path     = excluded.stored_path,
-       sha256          = excluded.sha256,
-       title           = excluded.title,
-       doc_id          = excluded.doc_id,
-       revision        = excluded.revision,
-       effective_date  = excluded.effective_date,
-       normalized_text = excluded.normalized_text,
-       uploaded_at     = excluded.uploaded_at`,
-  );
-
   // Re-ingesting a procedure refreshes its rules, but it cannot simply delete
-  // and re-insert them: a rule may be cited by findings from an earlier review,
-  // and `findings.rule_id` references `rules(rule_id)`. Hard-deleting a
-  // referenced rule fails the foreign key — and cascading the delete would erase
+  // and re-insert them: a rule may be cited by findings from an earlier review.
+  // `findings.rule_id` used to carry a foreign key into `rules`, but findings
+  // now live in the customer database and rules live here in the sops
+  // database — Postgres can't enforce that constraint across databases, so
+  // this check is now the only thing standing between deleting a rule and
+  // orphaning a finding's reference to it. Cascading the delete would erase
   // findings, destroying the audit trail this tool is careful to keep.
   //
   // So: upsert every current clause in place, then delete only the clauses that
-  // are gone from the new text AND cited by no finding. A removed clause that a
-  // past finding still references is left in place for referential integrity;
-  // that is a rare edge (you edited out a clause that had already been flagged)
-  // and keeping the historical finding valid is worth the small staleness.
-  const upsertRule = db.prepare(
-    `INSERT INTO rules
-       (rule_id, source, citation, title, expectation, applies_to,
-        harm_linked, citation_frequency, frequency_percentile,
-        corpus_version, sop_document_id)
-     VALUES (?, 'sop', ?, ?, ?, ?, 0, 0, 0, ?, ?)
-     ON CONFLICT(rule_id) DO UPDATE SET
-       citation       = excluded.citation,
-       title          = excluded.title,
-       expectation    = excluded.expectation,
-       applies_to     = excluded.applies_to,
-       corpus_version = excluded.corpus_version`,
-  );
-  const existingRuleIds = db.prepare(
-    `SELECT rule_id FROM rules WHERE sop_document_id = ?`,
-  );
-  const isReferenced = db.prepare(
-    `SELECT 1 FROM findings WHERE rule_id = ? LIMIT 1`,
-  );
-  const deleteRule = db.prepare(`DELETE FROM rules WHERE rule_id = ?`);
-
+  // are gone from the new text AND cited by no finding (checked against the
+  // customer database). A removed clause that a past finding still references
+  // is left in place; that is a rare edge (you edited out a clause that had
+  // already been flagged) and keeping the historical finding valid is worth
+  // the small staleness.
+  const customerDb = getCustomerDb();
   let rulesWritten = 0;
 
-  db.transaction(() => {
-    insertDoc.run(
-      document.sopDocumentId,
-      document.filename,
-      document.storedPath,
-      document.sha256,
-      document.title,
-      document.docId,
-      document.revision,
-      document.effectiveDate,
-      document.normalizedText,
-      document.uploadedAt,
-    );
+  await db.transaction(async () => {
+    await db
+      .prepare(
+        `INSERT INTO sop_documents
+           (sop_document_id, filename, stored_path, sha256, title, doc_id, revision,
+            effective_date, normalized_text, uploaded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sop_document_id) DO UPDATE SET
+           filename        = excluded.filename,
+           stored_path     = excluded.stored_path,
+           sha256          = excluded.sha256,
+           title           = excluded.title,
+           doc_id          = excluded.doc_id,
+           revision        = excluded.revision,
+           effective_date  = excluded.effective_date,
+           normalized_text = excluded.normalized_text,
+           uploaded_at     = excluded.uploaded_at`,
+      )
+      .run(
+        document.sopDocumentId,
+        document.filename,
+        document.storedPath,
+        document.sha256,
+        document.title,
+        document.docId,
+        document.revision,
+        document.effectiveDate,
+        document.normalizedText,
+        document.uploadedAt,
+      );
 
     const label = document.docId ?? document.filename;
     const currentIds = new Set<string>();
@@ -292,25 +277,44 @@ export function ingestSop(
     for (const clause of clauses) {
       const ruleId = `sop:${document.sopDocumentId}:${clause.number}`;
       currentIds.add(ruleId);
-      upsertRule.run(
-        ruleId,
-        // Cited the way an investigator would: procedure, revision, clause.
-        `${label}${document.revision ? ` Rev ${document.revision}` : ""} §${clause.number}`,
-        clause.heading ?? `Clause ${clause.number}`,
-        clause.text,
-        JSON.stringify(args.appliesTo),
-        CORPUS_VERSION,
-        document.sopDocumentId,
-      );
+      await db
+        .prepare(
+          `INSERT INTO rules
+             (rule_id, source, citation, title, expectation, applies_to,
+              harm_linked, citation_frequency, frequency_percentile,
+              corpus_version, sop_document_id)
+           VALUES (?, 'sop', ?, ?, ?, ?, 0, 0, 0, ?, ?)
+           ON CONFLICT(rule_id) DO UPDATE SET
+             citation       = excluded.citation,
+             title          = excluded.title,
+             expectation    = excluded.expectation,
+             applies_to     = excluded.applies_to,
+             corpus_version = excluded.corpus_version`,
+        )
+        .run(
+          ruleId,
+          // Cited the way an investigator would: procedure, revision, clause.
+          `${label}${document.revision ? ` Rev ${document.revision}` : ""} §${clause.number}`,
+          clause.heading ?? `Clause ${clause.number}`,
+          clause.text,
+          JSON.stringify(args.appliesTo),
+          CORPUS_VERSION,
+          document.sopDocumentId,
+        );
       rulesWritten++;
     }
 
     // Prune clauses that no longer exist, but only if nothing depends on them.
-    const prior = existingRuleIds.all(document.sopDocumentId) as { rule_id: string }[];
+    const prior = await db
+      .prepare(`SELECT rule_id FROM rules WHERE sop_document_id = ?`)
+      .all<{ rule_id: string }>(document.sopDocumentId);
     for (const { rule_id } of prior) {
       if (currentIds.has(rule_id)) continue;
-      if (isReferenced.get(rule_id)) continue;
-      deleteRule.run(rule_id);
+      const referenced = await customerDb
+        .prepare(`SELECT 1 FROM findings WHERE rule_id = ? LIMIT 1`)
+        .get(rule_id);
+      if (referenced) continue;
+      await db.prepare(`DELETE FROM rules WHERE rule_id = ?`).run(rule_id);
     }
   })();
 
@@ -323,24 +327,32 @@ export function ingestSop(
 }
 
 /** One procedure with its extracted clauses. `null` if unknown. */
-export function getSop(
+export async function getSop(
   sopDocumentId: string,
-  db: Db = getDb(),
-): (SopDocument & { appliesTo: RecordType[]; clauses: { number: string; citation: string; heading: string; expectation: string }[] }) | null {
-  const row = db
+  db: Db = getSopsDb(),
+): Promise<
+  | (SopDocument & {
+      appliesTo: RecordType[];
+      clauses: { number: string; citation: string; heading: string; expectation: string }[];
+    })
+  | null
+> {
+  const row = await db
     .prepare(`SELECT * FROM sop_documents WHERE sop_document_id = ?`)
-    .get(sopDocumentId) as Record<string, unknown> | undefined;
+    .get<Record<string, unknown>>(sopDocumentId);
   if (!row) return null;
 
-  const ruleRows = db
-    .prepare(`SELECT rule_id, citation, title, expectation, applies_to FROM rules WHERE sop_document_id = ? ORDER BY rule_id`)
-    .all(sopDocumentId) as {
-    rule_id: string;
-    citation: string;
-    title: string;
-    expectation: string;
-    applies_to: string;
-  }[];
+  const ruleRows = await db
+    .prepare(
+      `SELECT rule_id, citation, title, expectation, applies_to FROM rules WHERE sop_document_id = ? ORDER BY rule_id`,
+    )
+    .all<{
+      rule_id: string;
+      citation: string;
+      title: string;
+      expectation: string;
+      applies_to: string;
+    }>(sopDocumentId);
 
   // applies_to is stored identically on every clause of a procedure, so the
   // first rule's value is the procedure's.
@@ -384,15 +396,15 @@ export function getSop(
  * which is the point of making it editable. The ID is preserved so nothing that
  * references the procedure is orphaned.
  */
-export function updateSop(
+export async function updateSop(
   args: {
     sopDocumentId: string;
     raw?: string;
     appliesTo?: RecordType[];
   },
-  db: Db = getDb(),
-): SopIngestResult {
-  const existing = getSop(args.sopDocumentId, db);
+  db: Db = getSopsDb(),
+): Promise<SopIngestResult> {
+  const existing = await getSop(args.sopDocumentId, db);
   if (!existing) throw new Error(`no procedure with id ${args.sopDocumentId}`);
 
   return ingestSop(
@@ -408,24 +420,26 @@ export function updateSop(
 }
 
 /** Remove a procedure and every conformance rule derived from it. */
-export function deleteSop(sopDocumentId: string, db: Db = getDb()): boolean {
-  const info = db.transaction(() => {
+export async function deleteSop(sopDocumentId: string, db: Db = getSopsDb()): Promise<boolean> {
+  const info = await db.transaction(async () => {
     // Rules cascade via the foreign key, but delete explicitly so the intent is
     // visible and the count is knowable.
-    db.prepare(`DELETE FROM rules WHERE sop_document_id = ?`).run(sopDocumentId);
+    await db.prepare(`DELETE FROM rules WHERE sop_document_id = ?`).run(sopDocumentId);
     return db.prepare(`DELETE FROM sop_documents WHERE sop_document_id = ?`).run(sopDocumentId);
   })();
   return info.changes > 0;
 }
 
-export function listSops(db: Db = getDb()): (SopDocument & { ruleCount: number })[] {
-  const rows = db
+export async function listSops(
+  db: Db = getSopsDb(),
+): Promise<(SopDocument & { ruleCount: number })[]> {
+  const rows = await db
     .prepare(
       `SELECT s.*, (SELECT COUNT(*) FROM rules r WHERE r.sop_document_id = s.sop_document_id)
                      AS rule_count
          FROM sop_documents s ORDER BY s.uploaded_at DESC`,
     )
-    .all() as (Record<string, unknown> & { rule_count: number })[];
+    .all<Record<string, unknown> & { rule_count: number }>();
 
   return rows.map((r) => ({
     sopDocumentId: r["sop_document_id"] as string,
@@ -443,10 +457,10 @@ export function listSops(db: Db = getDb()): (SopDocument & { ruleCount: number }
 }
 
 /** SOP-derived rules only, for the conformance pass. */
-export function loadSopRules(recordType: RecordType, db: Db = getDb()): Rule[] {
-  const rows = db
+export async function loadSopRules(recordType: RecordType, db: Db = getSopsDb()): Promise<Rule[]> {
+  const rows = await db
     .prepare(`SELECT * FROM rules WHERE source = 'sop'`)
-    .all() as Record<string, unknown>[];
+    .all<Record<string, unknown>>();
 
   return rows
     .map((r) => {

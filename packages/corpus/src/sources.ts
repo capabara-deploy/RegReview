@@ -82,6 +82,29 @@ export const CFR_PART_820 = {
 } as const;
 
 /**
+ * Every part of 21 CFR Subchapter H (Medical Devices), as of 2026-08-08 —
+ * fetched from the eCFR structure API
+ * (https://www.ecfr.gov/api/versioner/v1/structure/2026-07-01/title-21.json)
+ * rather than assembled by hand, so nothing is missed or misnumbered. Part 813
+ * is `[Reserved]` and is omitted; the rest, from Part 800 (General) through
+ * Part 898 (the last device-classification part), are all real regulation
+ * text under this subchapter.
+ */
+export const CFR_SUBCHAPTER_H_PARTS = [
+  800, 801, 803, 806, 807, 808, 809, 810, 812, 814, 820, 821, 822, 830, 860,
+  861, 862, 864, 866, 868, 870, 872, 874, 876, 878, 880, 882, 884, 886, 888,
+  890, 892, 895, 898,
+] as const;
+
+/** Same eCFR versioner endpoint as {@link CFR_PART_820}, generalized to any part. */
+export function ecfrPartUrl(date: string, part: number): string {
+  return (
+    `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-21.xml` +
+    `?chapter=I&subchapter=H&part=${part}`
+  );
+}
+
+/**
  * FDA guidance documents. PDF only — there is no XML/JSON body for guidance.
  *
  * The Design Control guidance is served from the HHS Guidance Portal rather

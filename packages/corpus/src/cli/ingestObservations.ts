@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getDb, migrate } from "@regreview/core";
+import { getCorpusDb, migrateCorpus } from "@regreview/core";
 import { fetchCached } from "../fetch.js";
 import {
   DEVICES_SHEET,
@@ -85,21 +85,12 @@ async function ingestYear(fiscalYear: number, url: string, force: boolean): Prom
   const colFreq = header.columns.get(COL.frequency)!;
   const colArea = header.columns.get(COL.programArea);
 
-  const db = getDb();
-  const insert = db.prepare(
-    `INSERT INTO fda_observations
-       (observation_id, fiscal_year, program_area, citation,
-        short_description, long_description, frequency)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(observation_id) DO UPDATE SET
-       frequency        = excluded.frequency,
-       long_description = excluded.long_description`,
-  );
+  const db = getCorpusDb();
 
   let rows = 0;
   let totalCitations = 0;
 
-  const run = db.transaction(() => {
+  const run = db.transaction(async () => {
     for (const row of sheet.rows) {
       if (row.rowNumber <= header.rowNumber) continue;
 
@@ -113,27 +104,37 @@ async function ingestYear(fiscalYear: number, url: string, force: boolean): Prom
       const frequency = Number(frequencyRaw.replace(/,/g, ""));
       if (!Number.isFinite(frequency)) continue;
 
-      insert.run(
-        observationId(fiscalYear, citation, shortDescription),
-        fiscalYear,
-        (colArea ? row.cells.get(colArea) : undefined) ?? DEVICES_SHEET,
-        citation,
-        shortDescription,
-        (colLong ? row.cells.get(colLong) : undefined) ?? null,
-        frequency,
-      );
+      await db
+        .prepare(
+          `INSERT INTO fda_observations
+             (observation_id, fiscal_year, program_area, citation,
+              short_description, long_description, frequency)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(observation_id) DO UPDATE SET
+             frequency        = excluded.frequency,
+             long_description = excluded.long_description`,
+        )
+        .run(
+          observationId(fiscalYear, citation, shortDescription),
+          fiscalYear,
+          (colArea ? row.cells.get(colArea) : undefined) ?? DEVICES_SHEET,
+          citation,
+          shortDescription,
+          (colLong ? row.cells.get(colLong) : undefined) ?? null,
+          frequency,
+        );
       rows++;
       totalCitations += frequency;
     }
   });
-  run();
+  await run();
 
   return { fiscalYear, rows, totalCitations };
 }
 
 async function main(): Promise<void> {
   const force = process.argv.includes("--force");
-  migrate();
+  await migrateCorpus();
 
   console.log(
     `Ingesting FDA Inspectional Observation data (Devices) for ` +
@@ -164,10 +165,10 @@ async function main(): Promise<void> {
     }
   }
 
-  const db = getDb();
-  const { count } = db.prepare(`SELECT COUNT(*) AS count FROM fda_observations`).get() as {
-    count: number;
-  };
+  const db = getCorpusDb();
+  const { count } = (await db
+    .prepare(`SELECT COUNT(*) AS count FROM fda_observations`)
+    .get<{ count: number }>())!;
   console.log(`\n${count} observation rows in the database.`);
 
   if (failures.length > 0) {

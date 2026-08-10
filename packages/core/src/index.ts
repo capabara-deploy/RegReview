@@ -21,5 +21,5 @@ export {
 } from "./review/claudeEngine.js";
 export { consensus, type ConsensusResult } from "./review/consensus.js";
 export { OfflineReviewEngine, ScriptedReviewEngine } from "./review/offlineEngine.js";
-export { getDb, closeDb, type Db } from "./db/index.js";
-export { migrate } from "./db/migrate.js";
+export { getCorpusDb, getCustomerDb, getSopsDb, closeAllDbs, type Db } from "./db/index.js";
+export { migrateCorpus, migrateCustomer, migrateSops } from "./db/migrate.js";

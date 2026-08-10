@@ -70,7 +70,7 @@ export function categoriesForRules(rules: Rule[]): CheckCategory[] {
 }
 
 export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
-  const applicable = loadRulesFor(args.record.recordType);
+  const applicable = await loadRulesFor(args.record.recordType);
   if (applicable.length === 0) {
     throw new Error(
       `no rules apply to record type "${args.record.recordType}". ` +
@@ -117,7 +117,7 @@ export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
         ...(args.onProgress ? { onProgress: args.onProgress } : {}),
       });
 
-  const run = startRun({
+  const run = await startRun({
     recordId: args.record.recordId,
     model: args.offline ? engine.id : config.model,
     effort: args.offline ? "n/a" : config.effort,
@@ -131,11 +131,11 @@ export async function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
       rules,
       ...(args.related && args.related.length > 0 ? { related: args.related } : {}),
     });
-    saveFindings(result.findings);
-    finishRun(run.runId, "complete");
+    await saveFindings(result.findings);
+    await finishRun(run.runId, "complete");
     return { run, findings: result.findings, stats: result.stats };
   } catch (err) {
-    finishRun(run.runId, "failed", err instanceof Error ? err.message : String(err));
+    await finishRun(run.runId, "failed", err instanceof Error ? err.message : String(err));
     throw err;
   }
 }

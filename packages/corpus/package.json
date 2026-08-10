@@ -7,6 +7,7 @@
     "build": "tsc -b",
     "ingest:observations": "tsx src/cli/ingestObservations.ts",
     "ingest:cfr": "tsx src/cli/ingestCfr.ts",
+    "ingest:cfr:subchapter-h": "tsx src/cli/ingestCfrSubchapterH.ts",
     "ingest:guidance": "tsx src/cli/ingestGuidance.ts",
     "ingest:rules": "tsx src/cli/ingestAuthoredRules.ts",
     "report": "tsx src/cli/report.ts",
@@ -17,8 +18,10 @@
   },
   "dependencies": {
     "@regreview/core": "*",
+    "@types/pg": "^8.21.0",
     "fast-xml-parser": "^5.10.1",
     "fflate": "^0.8.2",
-    "pdfjs-dist": "^4.9.155"
+    "pdfjs-dist": "^4.9.155",
+    "pg": "^8.23.0"
   }
 }

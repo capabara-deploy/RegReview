@@ -7,7 +7,13 @@
  *
  *   npx tsx src/cli/rulesReport.ts [recordType]
  */
-import { loadRulesFor, migrate, RecordType, rulesForCategory } from "@regreview/core";
+import {
+  loadRulesFor,
+  migrateCorpus,
+  migrateSops,
+  RecordType,
+  rulesForCategory,
+} from "@regreview/core";
 import type { CheckCategory } from "@regreview/core";
 
 const CATEGORIES: CheckCategory[] = [
@@ -18,8 +24,8 @@ const CATEGORIES: CheckCategory[] = [
   "consistency",
 ];
 
-function main(): void {
-  migrate();
+async function main(): Promise<void> {
+  await Promise.all([migrateCorpus(), migrateSops()]);
   const arg = process.argv[2] ?? "capa";
   const parsed = RecordType.safeParse(arg);
   if (!parsed.success) {
@@ -29,7 +35,7 @@ function main(): void {
   }
   const recordType = parsed.data;
 
-  const rules = loadRulesFor(recordType);
+  const rules = await loadRulesFor(recordType);
   console.log(`Record type: ${recordType}`);
   console.log(`Applicable rules: ${rules.length}\n`);
 
@@ -60,4 +66,4 @@ function main(): void {
   }
 }
 
-main();
+await main();

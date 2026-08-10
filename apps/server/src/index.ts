@@ -24,21 +24,27 @@ import {
   detectFormat,
   extractRecord,
   FindingStatus,
-  getDb,
+  getCorpusDb,
+  getCustomerDb,
+  getSopsDb,
   getSop,
   ingestSop,
   listSops,
   loadFindings,
   loadRulesFor,
-  migrate,
+  migrateCorpus,
+  migrateCustomer,
+  migrateSops,
   RecordType,
   runReview,
   saveRecord,
   setFindingStatus,
   updateSop,
   type Block,
+  type Db,
   type Finding,
   type RecordDoc,
+  type SopIngestResult,
 } from "@regreview/core";
 
 /**
@@ -94,7 +100,7 @@ if (AUTH_ENABLED) {
   initQuota(await getMongoDb());
   await ensureQuotaIndexes();
 }
-migrate();
+await Promise.all([migrateCorpus(), migrateCustomer(), migrateSops()]);
 
 /**
  * Reconcile runs left mid-flight by a previous process.
@@ -109,16 +115,18 @@ migrate();
  * process that could be advancing it is the one that just booted.
  */
 {
-  const db = getDb();
-  const stranded = db
+  const db = getCustomerDb();
+  const stranded = await db
     .prepare(`SELECT run_id FROM runs WHERE status = 'running'`)
-    .all() as { run_id: string }[];
+    .all<{ run_id: string }>();
   if (stranded.length > 0) {
-    db.prepare(
-      `UPDATE runs SET status = 'failed', finished_at = ?,
-         error = 'interrupted: the server process ended before this review finished'
-       WHERE status = 'running'`,
-    ).run(new Date().toISOString());
+    await db
+      .prepare(
+        `UPDATE runs SET status = 'failed', finished_at = ?,
+           error = 'interrupted: the server process ended before this review finished'
+         WHERE status = 'running'`,
+      )
+      .run(new Date().toISOString());
     console.warn(
       `Marked ${stranded.length} interrupted run(s) as failed (left 'running' by a previous process).`,
     );
@@ -311,9 +319,9 @@ interface BlockRow {
 }
 
 /** Documents that have at least one completed run, newest activity first. */
-app.get("/api/records", (_req, res) => {
-  const db = getDb();
-  const rows = db
+app.get("/api/records", async (_req, res) => {
+  const db = getCustomerDb();
+  const rows = await db
     .prepare(
       `SELECT r.record_id, r.filename, r.record_type, r.doc_id, r.revision, r.created_at,
               COUNT(DISTINCT run.run_id) AS runs,
@@ -323,7 +331,7 @@ app.get("/api/records", (_req, res) => {
         GROUP BY r.record_id
         ORDER BY COALESCE(MAX(run.started_at), r.created_at) DESC`,
     )
-    .all() as (Omit<RecordRow, "normalized_text"> & { runs: number; last_run_at: string | null })[];
+    .all<Omit<RecordRow, "normalized_text"> & { runs: number; last_run_at: string | null }>();
 
   res.json(
     rows.map((r) => ({
@@ -339,25 +347,25 @@ app.get("/api/records", (_req, res) => {
 });
 
 /** The document text, its blocks, and its runs. */
-app.get("/api/records/:recordId", (req, res) => {
+app.get("/api/records/:recordId", async (req, res) => {
   const { recordId } = req.params;
-  const db = getDb();
+  const db = getCustomerDb();
 
-  const record = db.prepare(`SELECT * FROM records WHERE record_id = ?`).get(recordId) as
-    | RecordRow
-    | undefined;
+  const record = await db
+    .prepare(`SELECT * FROM records WHERE record_id = ?`)
+    .get<RecordRow>(recordId);
   if (!record) return res.status(404).json({ error: "record not found" });
 
-  const blocks = db
+  const blocks = await db
     .prepare(
       `SELECT block_id, record_id, ordinal, char_start, char_end, heading
          FROM blocks WHERE record_id = ? ORDER BY ordinal`,
     )
-    .all(recordId) as BlockRow[];
+    .all<BlockRow>(recordId);
 
-  const runs = db
+  const runs = await db
     .prepare(`SELECT * FROM runs WHERE record_id = ? ORDER BY started_at DESC`)
-    .all(recordId) as RunRow[];
+    .all<RunRow>(recordId);
 
   res.json({
     recordId: record.record_id,
@@ -391,8 +399,8 @@ app.get("/api/records/:recordId", (req, res) => {
   });
 });
 
-app.get("/api/runs/:runId/findings", (req, res) => {
-  res.json(loadFindings(req.params.runId));
+app.get("/api/runs/:runId/findings", async (req, res) => {
+  res.json(await loadFindings(req.params.runId));
 });
 
 const PatchBody = z.object({
@@ -408,20 +416,20 @@ const PatchBody = z.object({
  * `finding_events`, which is never updated or deleted — that append-only log is
  * the Part 11 groundwork.
  */
-app.patch("/api/runs/:runId/findings/:findingId", (req, res) => {
+app.patch("/api/runs/:runId/findings/:findingId", async (req, res) => {
   const { runId, findingId } = req.params;
   const parsed = PatchBody.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
 
-  const db = getDb();
-  const exists = db
+  const db = getCustomerDb();
+  const exists = await db
     .prepare(`SELECT 1 FROM findings WHERE run_id = ? AND finding_id = ?`)
     .get(runId, findingId);
   if (!exists) return res.status(404).json({ error: "finding not found" });
 
-  setFindingStatus({
+  await setFindingStatus({
     runId,
     findingId,
     status: parsed.data.status,
@@ -429,16 +437,16 @@ app.patch("/api/runs/:runId/findings/:findingId", (req, res) => {
     ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
   });
 
-  const updated = loadFindings(runId).find((f: Finding) => f.findingId === findingId);
+  const updated = (await loadFindings(runId)).find((f: Finding) => f.findingId === findingId);
   res.json(updated);
 });
 
 /** The audit trail for one finding. */
-app.get("/api/runs/:runId/findings/:findingId/events", (req, res) => {
+app.get("/api/runs/:runId/findings/:findingId/events", async (req, res) => {
   const { runId, findingId } = req.params;
-  const db = getDb();
+  const db = getCustomerDb();
   res.json(
-    db
+    await db
       .prepare(
         `SELECT event_id, event_type, actor, note, occurred_at
            FROM finding_events WHERE run_id = ? AND finding_id = ? ORDER BY event_id`,
@@ -481,41 +489,54 @@ function mapRule(row: RuleRow) {
  * FDA citation frequency inherited through each rule's CFR crosswalk. The
  * customer's editable procedures are served separately from /api/sops.
  */
-app.get("/api/rules", (req, res) => {
+const RULE_COLUMNS = `rule_id, source, citation, title, expectation, applies_to,
+              harm_linked, citation_frequency, frequency_percentile`;
+
+app.get("/api/rules", async (req, res) => {
   // ?include=all adds the customer's own SOP clauses. The reference library in
   // the Procedures view wants only the shipped corpus; the review rule picker
   // wants everything selectable, including the customer's procedures.
+  //
+  // The public corpus and SOP-derived rules live in separate databases now
+  // (see db/index.ts), so this is two queries merged and re-sorted in JS
+  // rather than one WHERE-filtered scan of a single table. The corpus query
+  // alone already matches the old `WHERE source != 'sop'` case exactly, since
+  // the corpus database's `rules` table structurally excludes 'sop' rows.
   const withSops = req.query["include"] === "all";
 
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT rule_id, source, citation, title, expectation, applies_to,
-              harm_linked, citation_frequency, frequency_percentile
-         FROM rules
-        ${withSops ? "" : "WHERE source != 'sop'"}
-        ORDER BY source, frequency_percentile DESC, citation_frequency DESC`,
-    )
-    .all() as RuleRow[];
+  const rows = await getCorpusDb()
+    .prepare(`SELECT ${RULE_COLUMNS} FROM rules`)
+    .all<RuleRow>();
+  if (withSops) {
+    rows.push(...(await getSopsDb().prepare(`SELECT ${RULE_COLUMNS} FROM rules`).all<RuleRow>()));
+  }
+  rows.sort(
+    (a, b) =>
+      a.source.localeCompare(b.source) ||
+      b.frequency_percentile - a.frequency_percentile ||
+      b.citation_frequency - a.citation_frequency,
+  );
   res.json(rows.map(mapRule));
 });
 
 /** The rule behind a finding, so the reviewer can read the requirement in full. */
-app.get("/api/rules/:ruleId", (req, res) => {
+app.get("/api/rules/:ruleId", async (req, res) => {
   const { ruleId } = req.params;
-  const db = getDb();
-  const row = db.prepare(`SELECT * FROM rules WHERE rule_id = ?`).get(ruleId) as
-    | {
-        rule_id: string;
-        source: string;
-        citation: string;
-        title: string;
-        expectation: string;
-        harm_linked: number;
-        citation_frequency: number;
-        frequency_percentile: number;
-      }
-    | undefined;
+  // A rule may live in either database depending on its source (see
+  // db/index.ts) — try the public corpus first, then the customer's SOPs.
+  type FullRuleRow = {
+    rule_id: string;
+    source: string;
+    citation: string;
+    title: string;
+    expectation: string;
+    harm_linked: number;
+    citation_frequency: number;
+    frequency_percentile: number;
+  };
+  const row =
+    (await getCorpusDb().prepare(`SELECT * FROM rules WHERE rule_id = ?`).get<FullRuleRow>(ruleId)) ??
+    (await getSopsDb().prepare(`SELECT * FROM rules WHERE rule_id = ?`).get<FullRuleRow>(ruleId));
   if (!row) return res.status(404).json({ error: "rule not found" });
   res.json({
     ruleId: row.rule_id,
@@ -586,7 +607,7 @@ app.post("/api/records", upload.single("file"), async (req, res) => {
   // Show the original filename, not the collision-proofed on-disk name. The
   // stored path keeps the prefixed name; only the display label is cleaned.
   extracted.record.filename = basename(uploaded.originalname);
-  saveRecord(extracted.record, extracted.blocks);
+  await saveRecord(extracted.record, extracted.blocks);
 
   res.status(201).json({
     recordId: extracted.record.recordId,
@@ -618,7 +639,7 @@ const RecordPatchBody = z.object({ recordType: RecordType });
  * make `runs.corpus_version` a lie. The count is returned so the caller can say
  * that past runs used the old rule set.
  */
-app.patch("/api/records/:recordId", (req, res) => {
+app.patch("/api/records/:recordId", async (req, res) => {
   const { recordId } = req.params;
   const parsed = RecordPatchBody.safeParse(req.body);
   if (!parsed.success) {
@@ -627,22 +648,19 @@ app.patch("/api/records/:recordId", (req, res) => {
     });
   }
 
-  const db = getDb();
-  const row = db
+  const db = getCustomerDb();
+  const row = await db
     .prepare(`SELECT record_type FROM records WHERE record_id = ?`)
-    .get(recordId) as { record_type: string } | undefined;
+    .get<{ record_type: string }>(recordId);
   if (!row) return res.status(404).json({ error: "record not found" });
 
-  db.prepare(`UPDATE records SET record_type = ? WHERE record_id = ?`).run(
-    parsed.data.recordType,
-    recordId,
-  );
+  await db
+    .prepare(`UPDATE records SET record_type = ? WHERE record_id = ?`)
+    .run(parsed.data.recordType, recordId);
 
   const runs = (
-    db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get(recordId) as {
-      n: number;
-    }
-  ).n;
+    await db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get<{ n: number }>(recordId)
+  )?.n ?? 0;
 
   res.json({
     recordId,
@@ -650,7 +668,7 @@ app.patch("/api/records/:recordId", (req, res) => {
     recordType: parsed.data.recordType,
     // How many rules the new type actually brings, so the UI can warn when a
     // reclassification leaves a document with nothing to check it against.
-    applicableRules: loadRulesFor(parsed.data.recordType).length,
+    applicableRules: (await loadRulesFor(parsed.data.recordType)).length,
     priorRuns: runs,
   });
 });
@@ -667,27 +685,34 @@ app.patch("/api/records/:recordId", (req, res) => {
  * the cascade rules exist to protect offset integrity when a document is
  * re-blocked, not to define what deletion means.
  */
-app.delete("/api/records/:recordId", (req, res) => {
+app.delete("/api/records/:recordId", async (req, res) => {
   const { recordId } = req.params;
-  const db = getDb();
+  const db = getCustomerDb();
 
-  const exists = db.prepare(`SELECT 1 FROM records WHERE record_id = ?`).get(recordId);
+  const exists = await db.prepare(`SELECT 1 FROM records WHERE record_id = ?`).get(recordId);
   if (!exists) return res.status(404).json({ error: "record not found" });
 
   const counts = {
-    runs: (db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get(recordId) as { n: number }).n,
-    findings: (db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE record_id = ?`).get(recordId) as { n: number }).n,
+    runs:
+      (await db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE record_id = ?`).get<{ n: number }>(recordId))
+        ?.n ?? 0,
+    findings:
+      (await db
+        .prepare(`SELECT COUNT(*) AS n FROM findings WHERE record_id = ?`)
+        .get<{ n: number }>(recordId))?.n ?? 0,
   };
 
-  db.transaction(() => {
-    db.prepare(
-      `DELETE FROM finding_events WHERE run_id IN (SELECT run_id FROM runs WHERE record_id = ?)`,
-    ).run(recordId);
-    db.prepare(`DELETE FROM findings WHERE record_id = ?`).run(recordId);
-    db.prepare(`DELETE FROM facts WHERE record_id = ?`).run(recordId);
-    db.prepare(`DELETE FROM runs WHERE record_id = ?`).run(recordId);
-    db.prepare(`DELETE FROM blocks WHERE record_id = ?`).run(recordId);
-    db.prepare(`DELETE FROM records WHERE record_id = ?`).run(recordId);
+  await db.transaction(async () => {
+    await db
+      .prepare(
+        `DELETE FROM finding_events WHERE run_id IN (SELECT run_id FROM runs WHERE record_id = ?)`,
+      )
+      .run(recordId);
+    await db.prepare(`DELETE FROM findings WHERE record_id = ?`).run(recordId);
+    await db.prepare(`DELETE FROM facts WHERE record_id = ?`).run(recordId);
+    await db.prepare(`DELETE FROM runs WHERE record_id = ?`).run(recordId);
+    await db.prepare(`DELETE FROM blocks WHERE record_id = ?`).run(recordId);
+    await db.prepare(`DELETE FROM records WHERE record_id = ?`).run(recordId);
   })();
 
   // The uploaded file itself is left on disk. It is the customer's document and
@@ -750,9 +775,9 @@ function expectedSteps(categories: number): number {
  * `runReview` actually makes, so the bar is scaled to the work being done rather
  * than to a full review that is not happening.
  */
-function passCountFor(recordType: RecordType, ruleIds: string[]): number {
+async function passCountFor(recordType: RecordType, ruleIds: string[]): Promise<number> {
   if (ruleIds.length === 0) return 4;
-  const applicable = loadRulesFor(recordType);
+  const applicable = await loadRulesFor(recordType);
   const scoped = applicable.filter((r) => ruleIds.includes(r.ruleId));
   return Math.max(1, categoriesForRules(scoped).length);
 }
@@ -810,8 +835,8 @@ app.post("/api/records/:recordId/review", async (req, res) => {
     return res.status(400).json({ error: "invalid body", detail: parsed.error.issues });
   }
 
-  const db = getDb();
-  const record = loadRecord(db, recordId);
+  const db = getCustomerDb();
+  const record = await loadRecord(db, recordId);
   if (!record) return res.status(404).json({ error: "record not found" });
 
   // A model review with no credential fails deep in the engine with a confusing
@@ -838,7 +863,7 @@ app.post("/api/records/:recordId/review", async (req, res) => {
 
   const related = [];
   for (const id of parsed.data.related) {
-    const r = loadRecord(db, id);
+    const r = await loadRecord(db, id);
     if (r) related.push(r);
   }
 
@@ -848,7 +873,7 @@ app.post("/api/records/:recordId/review", async (req, res) => {
     docId: record.record.docId,
     status: "running",
     stepsDone: 0,
-    stepsTotal: expectedSteps(passCountFor(record.record.recordType, parsed.data.ruleIds)),
+    stepsTotal: expectedSteps(await passCountFor(record.record.recordType, parsed.data.ruleIds)),
     phase: "starting",
   };
 
@@ -946,10 +971,10 @@ app.post("/api/reviews/batch", async (req, res) => {
     });
   }
 
-  const db = getDb();
+  const db = getCustomerDb();
   const loaded = [];
   for (const id of parsed.data.recordIds) {
-    const r = loadRecord(db, id);
+    const r = await loadRecord(db, id);
     if (r) loaded.push(r);
   }
   if (loaded.length === 0) {
@@ -973,7 +998,7 @@ app.post("/api/reviews/batch", async (req, res) => {
   const relatedDocs = [];
   for (const id of parsed.data.related) {
     if (parsed.data.recordIds.includes(id)) continue;
-    const r = loadRecord(db, id);
+    const r = await loadRecord(db, id);
     if (r) relatedDocs.push(r);
   }
 
@@ -983,15 +1008,17 @@ app.post("/api/reviews/batch", async (req, res) => {
     status: "running",
     progress: [],
     startedAt: new Date().toISOString(),
-    results: loaded.map((r) => ({
-      recordId: r.record.recordId,
-      filename: r.record.filename,
-      docId: r.record.docId,
-      status: "pending" as const,
-      stepsDone: 0,
-      stepsTotal: expectedSteps(passCountFor(r.record.recordType, parsed.data.ruleIds)),
-      phase: null,
-    })),
+    results: await Promise.all(
+      loaded.map(async (r) => ({
+        recordId: r.record.recordId,
+        filename: r.record.filename,
+        docId: r.record.docId,
+        status: "pending" as const,
+        stepsDone: 0,
+        stepsTotal: expectedSteps(await passCountFor(r.record.recordType, parsed.data.ruleIds)),
+        phase: null,
+      })),
+    ),
   };
   jobs.set(job.jobId, job);
   pruneJobs();
@@ -1090,10 +1117,10 @@ function pruneJobs(): void {
 // Managing the customer's procedures (SOPs)
 // ---------------------------------------------------------------------------
 
-app.get("/api/sops", (_req, res) => res.json(listSops()));
+app.get("/api/sops", async (_req, res) => res.json(await listSops()));
 
-app.get("/api/sops/:sopId", (req, res) => {
-  const sop = getSop(req.params.sopId);
+app.get("/api/sops/:sopId", async (req, res) => {
+  const sop = await getSop(req.params.sopId);
   if (!sop) return res.status(404).json({ error: "procedure not found" });
   res.json(sop);
 });
@@ -1125,7 +1152,7 @@ app.post("/api/sops", upload.single("file"), async (req, res) => {
     // Reuse format parsing so a .docx procedure becomes text before clause
     // extraction runs on it.
     const extracted = await extractRecord({ path: storedPath, recordType: "unknown" });
-    const result = ingestSop({
+    const result = await ingestSop({
       filename: basename(uploaded.originalname),
       storedPath,
       raw: extracted.record.normalizedText,
@@ -1140,7 +1167,7 @@ app.post("/api/sops", upload.single("file"), async (req, res) => {
   }
   const storedPath = join(uploadDir, safeStoredName(parsed.data.filename));
   writeFileSync(storedPath, parsed.data.text, "utf8");
-  const result = ingestSop({
+  const result = await ingestSop({
     filename: parsed.data.filename,
     storedPath,
     raw: parsed.data.text,
@@ -1155,7 +1182,7 @@ const SopEditBody = z.object({
 });
 
 /** Edit a procedure in place — new text and/or which record types it governs. */
-app.put("/api/sops/:sopId", (req, res) => {
+app.put("/api/sops/:sopId", async (req, res) => {
   const { sopId } = req.params;
   const parsed = SopEditBody.safeParse(req.body);
   if (!parsed.success) {
@@ -1164,9 +1191,9 @@ app.put("/api/sops/:sopId", (req, res) => {
   if (parsed.data.text === undefined && parsed.data.appliesTo === undefined) {
     return res.status(400).json({ error: "nothing to update: provide text and/or appliesTo" });
   }
-  if (!getSop(sopId)) return res.status(404).json({ error: "procedure not found" });
+  if (!(await getSop(sopId))) return res.status(404).json({ error: "procedure not found" });
 
-  const result = updateSop({
+  const result = await updateSop({
     sopDocumentId: sopId,
     ...(parsed.data.text !== undefined ? { raw: parsed.data.text } : {}),
     ...(parsed.data.appliesTo !== undefined ? { appliesTo: parsed.data.appliesTo } : {}),
@@ -1174,8 +1201,8 @@ app.put("/api/sops/:sopId", (req, res) => {
   res.json(summarizeIngest(result));
 });
 
-app.delete("/api/sops/:sopId", (req, res) => {
-  const removed = deleteSop(req.params.sopId);
+app.delete("/api/sops/:sopId", async (req, res) => {
+  const removed = await deleteSop(req.params.sopId);
   if (!removed) return res.status(404).json({ error: "procedure not found" });
   res.status(204).end();
 });
@@ -1189,7 +1216,7 @@ function parseAppliesTo(raw: string): RecordType[] {
   return out.length > 0 ? out : ["capa"];
 }
 
-function summarizeIngest(result: ReturnType<typeof ingestSop>) {
+function summarizeIngest(result: SopIngestResult) {
   return {
     sopDocumentId: result.document.sopDocumentId,
     filename: result.document.filename,
@@ -1201,18 +1228,18 @@ function summarizeIngest(result: ReturnType<typeof ingestSop>) {
 }
 
 /** Load a record and its blocks for review. */
-function loadRecord(
-  db: ReturnType<typeof getDb>,
+async function loadRecord(
+  db: Db,
   recordId: string,
-): { record: RecordDoc; blocks: Block[] } | null {
-  const row = db.prepare(`SELECT * FROM records WHERE record_id = ?`).get(recordId) as
-    | Record<string, unknown>
-    | undefined;
+): Promise<{ record: RecordDoc; blocks: Block[] } | null> {
+  const row = await db
+    .prepare(`SELECT * FROM records WHERE record_id = ?`)
+    .get<Record<string, unknown>>(recordId);
   if (!row) return null;
 
-  const blockRows = db
+  const blockRows = await db
     .prepare(`SELECT * FROM blocks WHERE record_id = ? ORDER BY ordinal`)
-    .all(recordId) as Record<string, unknown>[];
+    .all<Record<string, unknown>>(recordId);
 
   const record: RecordDoc = {
     recordId: row["record_id"] as string,
@@ -1255,10 +1282,22 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: "internal error" });
 });
 
+/** host/dbname only — never the credential-bearing connection string. */
+function describeDb(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}/${u.pathname.replace(/^\//, "")}`;
+  } catch {
+    return "(unparseable)";
+  }
+}
+
 app.listen(PORT, HOST, () => {
   console.log(`RegReview API on http://${HOST}:${PORT}`);
   console.log(`  auth      : ${AUTH_ENABLED ? "Mongo accounts" : "DISABLED (loopback only)"}`);
   console.log(`  site      : ${SITE_ORIGINS.join(", ")}`);
-  console.log(`  database  : ${config.dbPath}`);
+  console.log(`  corpus db : ${describeDb(config.corpusDatabaseUrl)}`);
+  console.log(`  customer db: ${describeDb(config.customerDatabaseUrl)}`);
+  console.log(`  sops db   : ${describeDb(config.sopsDatabaseUrl)}`);
   console.log(`  uploads   : ${config.uploadDir}`);
 });

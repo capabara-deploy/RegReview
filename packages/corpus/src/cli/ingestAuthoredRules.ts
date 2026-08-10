@@ -1,4 +1,4 @@
-import { CORPUS_VERSION, assignFrequencyPercentiles, getDb, migrate } from "@regreview/core";
+import { CORPUS_VERSION, assignFrequencyPercentiles, getCorpusDb, migrateCorpus } from "@regreview/core";
 import { AUTHORED_RULES, sourceFor, type AuthoredRule } from "../authoredRules.js";
 import { isRelated, parseCitation } from "../citation.js";
 
@@ -50,18 +50,18 @@ function frequencyFor(rule: AuthoredRule, observations: ObservationRow[]): numbe
   return total;
 }
 
-function main(): void {
-  migrate();
-  const db = getDb();
+async function main(): Promise<void> {
+  await migrateCorpus();
+  const db = getCorpusDb();
 
   // Collapse to one row per distinct citation, summed over fiscal years.
-  const observations = db
+  const observations = await db
     .prepare(
       `SELECT citation, SUM(frequency) AS frequency
          FROM fda_observations
         GROUP BY citation`,
     )
-    .all() as ObservationRow[];
+    .all<ObservationRow>();
 
   if (observations.length === 0) {
     console.error(
@@ -73,24 +73,6 @@ function main(): void {
     return;
   }
 
-  const insert = db.prepare(
-    `INSERT INTO rules
-       (rule_id, source, citation, title, expectation, applies_to,
-        harm_linked, citation_frequency, frequency_percentile,
-        corpus_version, sop_document_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-     ON CONFLICT(rule_id) DO UPDATE SET
-       source               = excluded.source,
-       citation             = excluded.citation,
-       title                = excluded.title,
-       expectation          = excluded.expectation,
-       applies_to           = excluded.applies_to,
-       harm_linked          = excluded.harm_linked,
-       citation_frequency   = excluded.citation_frequency,
-       frequency_percentile = excluded.frequency_percentile,
-       corpus_version       = excluded.corpus_version`,
-  );
-
   // Resolve frequencies first, then rank them, so the percentile each rule gets
   // reflects the whole corpus rather than insertion order.
   const withFrequency = AUTHORED_RULES.map((rule) => ({
@@ -101,22 +83,39 @@ function main(): void {
 
   const loaded: { rule: AuthoredRule; frequency: number; percentile: number }[] = [];
 
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const entry of withFrequency) {
       const { rule, citationFrequency } = entry;
       const percentile = percentiles.get(entry) ?? 0;
-      insert.run(
-        rule.ruleId,
-        sourceFor(rule),
-        rule.citation,
-        rule.title,
-        rule.expectation,
-        JSON.stringify(rule.appliesTo),
-        rule.harmLinked ? 1 : 0,
-        citationFrequency,
-        percentile,
-        CORPUS_VERSION,
-      );
+      await db
+        .prepare(
+          `INSERT INTO rules
+             (rule_id, source, citation, title, expectation, applies_to,
+              harm_linked, citation_frequency, frequency_percentile, corpus_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(rule_id) DO UPDATE SET
+             source               = excluded.source,
+             citation             = excluded.citation,
+             title                = excluded.title,
+             expectation          = excluded.expectation,
+             applies_to           = excluded.applies_to,
+             harm_linked          = excluded.harm_linked,
+             citation_frequency   = excluded.citation_frequency,
+             frequency_percentile = excluded.frequency_percentile,
+             corpus_version       = excluded.corpus_version`,
+        )
+        .run(
+          rule.ruleId,
+          sourceFor(rule),
+          rule.citation,
+          rule.title,
+          rule.expectation,
+          JSON.stringify(rule.appliesTo),
+          rule.harmLinked ? 1 : 0,
+          citationFrequency,
+          percentile,
+          CORPUS_VERSION,
+        );
       loaded.push({ rule, frequency: citationFrequency, percentile });
     }
   })();
@@ -152,4 +151,4 @@ function main(): void {
   }
 }
 
-main();
+await main();

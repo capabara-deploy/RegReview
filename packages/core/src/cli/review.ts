@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { config } from "../config.js";
 import { cacheHitRate, totalInputTokens, type ReviewEngine } from "../engine.js";
 import { extractRecord } from "../extract/index.js";
-import { migrate } from "../db/migrate.js";
+import { migrateCorpus, migrateCustomer, migrateSops } from "../db/migrate.js";
 import { runAgreement } from "../review/anchor.js";
 import { ClaudeReviewEngine } from "../review/claudeEngine.js";
 import { OfflineReviewEngine } from "../review/offlineEngine.js";
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  migrate();
+  await Promise.all([migrateCorpus(), migrateCustomer(), migrateSops()]);
 
   const path = resolve(parsed.path);
   const extraction = await extractRecord({ path, recordType: parsed.recordType });
@@ -212,7 +212,7 @@ async function main(): Promise<void> {
     console.warn(`\nWARNING: ${extraction.warning}\n`);
   }
 
-  const applicableRules = loadRulesFor(record.recordType);
+  const applicableRules = await loadRulesFor(record.recordType);
   if (applicableRules.length === 0) {
     console.error(
       "No rules apply to this record type. Run `npm run ingest:rules` " +
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
     // produce a wrong finding.
     const built = await extractRecord({ path: resolve(relPath) });
     if (built.warning) console.warn(`\nWARNING: ${built.warning}\n`);
-    saveRecord(built.record, built.blocks);
+    await saveRecord(built.record, built.blocks);
     relatedDocs.push({ record: built.record, blocks: built.blocks });
   }
 
@@ -285,7 +285,7 @@ async function main(): Promise<void> {
     );
   }
 
-  const saved = saveRecord(record, blocks);
+  const saved = await saveRecord(record, blocks);
   if (saved.discardedFindings > 0) {
     // Never let this be silent: it means prior runs are no longer comparable.
     console.warn(
@@ -352,7 +352,7 @@ async function main(): Promise<void> {
 
   for (let attempt = 1; attempt <= parsed.repeat; attempt++) {
     if (parsed.repeat > 1) console.log(`\n--- run ${attempt} of ${parsed.repeat} ---`);
-    const run = startRun({
+    const run = await startRun({
       recordId: record.recordId,
       model: parsed.offline ? engine.id : config.model,
       effort: parsed.offline ? "n/a" : config.effort,
@@ -366,8 +366,8 @@ async function main(): Promise<void> {
         rules,
         ...(relatedDocs.length > 0 ? { related: relatedDocs } : {}),
       });
-      saveFindings(result.findings);
-      finishRun(run.runId, "complete");
+      await saveFindings(result.findings);
+      await finishRun(run.runId, "complete");
       allRuns.push(result.findings);
 
       const showDetail = attempt === 1 || parsed.repeat === 1;
@@ -423,7 +423,7 @@ async function main(): Promise<void> {
       }
       console.log(`  run id: ${run.runId}`);
     } catch (err) {
-      finishRun(run.runId, "failed", err instanceof Error ? err.message : String(err));
+      await finishRun(run.runId, "failed", err instanceof Error ? err.message : String(err));
       throw err;
     }
   }

@@ -1,4 +1,4 @@
-import { getDb, migrate } from "@regreview/core";
+import { getCorpusDb, migrateCorpus } from "@regreview/core";
 
 /**
  * Sanity-check what actually landed in the corpus.
@@ -19,15 +19,15 @@ function section(title: string): void {
   console.log(`\n${title}\n${"-".repeat(title.length)}`);
 }
 
-function main(): void {
-  migrate();
-  const db = getDb();
+async function main(): Promise<void> {
+  await migrateCorpus();
+  const db = getCorpusDb();
 
-  const { years, rows } = db
+  const { years, rows } = (await db
     .prepare(
       `SELECT COUNT(DISTINCT fiscal_year) AS years, COUNT(*) AS rows FROM fda_observations`,
     )
-    .get() as { years: number; rows: number };
+    .get<{ years: number; rows: number }>())!;
 
   if (rows === 0) {
     console.log("No observation data. Run `npm run ingest:observations` first.");
@@ -35,12 +35,12 @@ function main(): void {
   }
 
   section(`FDA observation data: ${rows} rows across ${years} fiscal years`);
-  const perYear = db
+  const perYear = await db
     .prepare(
       `SELECT fiscal_year, COUNT(*) AS observations, SUM(frequency) AS citations
          FROM fda_observations GROUP BY fiscal_year ORDER BY fiscal_year DESC`,
     )
-    .all() as { fiscal_year: number; observations: number; citations: number }[];
+    .all<{ fiscal_year: number; observations: number; citations: number }>();
   for (const y of perYear) {
     console.log(
       `  FY${y.fiscal_year}  ${String(y.observations).padStart(4)} observations  ` +
@@ -51,7 +51,7 @@ function main(): void {
   // The headline check. Aggregated across every ingested year so a single
   // anomalous year can't flip the ranking.
   section("Top 20 device citations, all ingested years");
-  const top = db
+  const top = await db
     .prepare(
       `SELECT citation,
               SUM(frequency) AS total,
@@ -61,7 +61,7 @@ function main(): void {
         ORDER BY total DESC
         LIMIT 20`,
     )
-    .all() as { citation: string; total: number; description: string }[];
+    .all<{ citation: string; total: number; description: string }>();
 
   const max = top[0]?.total ?? 0;
   for (const [i, row] of top.entries()) {
@@ -76,29 +76,29 @@ function main(): void {
   // it to the reader to eyeball.
   section("Verification");
   const capaTotal = (
-    db
+    await db
       .prepare(
         `SELECT COALESCE(SUM(frequency), 0) AS total FROM fda_observations
           WHERE citation LIKE '%820.100%'`,
       )
-      .get() as { total: number }
-  ).total;
+      .get<{ total: number }>()
+  )!.total;
   const complaintTotal = (
-    db
+    await db
       .prepare(
         `SELECT COALESCE(SUM(frequency), 0) AS total FROM fda_observations
           WHERE citation LIKE '%820.198%'`,
       )
-      .get() as { total: number }
-  ).total;
+      .get<{ total: number }>()
+  )!.total;
   const designTotal = (
-    db
+    await db
       .prepare(
         `SELECT COALESCE(SUM(frequency), 0) AS total FROM fda_observations
           WHERE citation LIKE '%820.30%'`,
       )
-      .get() as { total: number }
-  ).total;
+      .get<{ total: number }>()
+  )!.total;
 
   console.log(`  CAPA (820.100) total citations:        ${capaTotal}`);
   console.log(`  Complaints (820.198) total citations:  ${complaintTotal}`);
@@ -122,9 +122,9 @@ function main(): void {
   // Corpus tables, for orientation once later phases populate them.
   section("Corpus tables");
   for (const table of ["rules", "cfr_sections", "fda_observations"]) {
-    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number };
+    const { n } = (await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get<{ n: number }>())!;
     console.log(`  ${table.padEnd(18)} ${n}`);
   }
 }
 
-main();
+await main();

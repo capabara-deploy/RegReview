@@ -10,24 +10,24 @@
  */
 import {
   findDiscrepancies,
-  getDb,
+  getCustomerDb,
   loadFacts,
-  migrate,
+  migrateCustomer,
   normalizeSubject,
   normalizeValue,
 } from "@regreview/core";
 
-function main(): void {
-  migrate();
-  const db = getDb();
+async function main(): Promise<void> {
+  await migrateCustomer();
+  const db = getCustomerDb();
 
-  const records = db
+  const records = await db
     .prepare(
       `SELECT r.record_id, COALESCE(r.doc_id, r.filename) AS label,
               (SELECT COUNT(*) FROM facts f WHERE f.record_id = r.record_id) AS n
          FROM records r ORDER BY r.created_at`,
     )
-    .all() as { record_id: string; label: string; n: number }[];
+    .all<{ record_id: string; label: string; n: number }>();
 
   const withFacts = records.filter((r) => r.n > 0);
   if (withFacts.length === 0) {
@@ -37,7 +37,7 @@ function main(): void {
 
   for (const r of withFacts) {
     console.log(`\n${r.label}  (${r.n} facts)`);
-    for (const f of loadFacts([r.record_id])) {
+    for (const f of await loadFacts([r.record_id])) {
       console.log(
         `  ${f.kind.padEnd(30)} value=${normalizeValue(f.value).padEnd(12)} ` +
           `subject="${f.subject}"`,
@@ -48,7 +48,7 @@ function main(): void {
 
   // Calls the real findDiscrepancies rather than reimplementing the join, so the
   // diagnostic can never disagree with what the product actually does.
-  const all = loadFacts(withFacts.map((r) => r.record_id));
+  const all = await loadFacts(withFacts.map((r) => r.record_id));
   const label = new Map(withFacts.map((r) => [r.record_id, r.label]));
   const discrepancies = findDiscrepancies(all);
 
@@ -73,4 +73,4 @@ function main(): void {
   }
 }
 
-main();
+await main();
