@@ -64,52 +64,71 @@ export function App() {
     }
   }, []);
 
-  const openRecord = useCallback(async (recordId: string) => {
-    setError(null);
-    try {
-      const detail = await api.record(recordId);
-      setRecord(detail);
-      // Prefer the newest real review. The offline keyword baseline is a
-      // development diagnostic whose findings are deliberately crude, and
-      // defaulting to it would show a reviewer output the product never
-      // produces.
-      const complete = detail.runs.filter((r) => r.status === "complete");
-      const latest =
-        complete.find((r) => !r.model.startsWith("keyword-")) ?? complete[0] ?? detail.runs[0];
-      if (latest) {
-        setRunId(latest.runId);
-        setFindings(await api.findings(latest.runId));
-      } else {
-        setRunId(null);
-        setFindings([]);
+  /**
+   * Open a document and show one of its runs.
+   *
+   * `prefer` decides which. Opening a record by hand shows the newest review —
+   * you just ran it, it's what you came to see. The landing view asks for
+   * `"earliest"` instead, so the first screen is a fixed, known review rather
+   * than whatever was last experimented with.
+   */
+  const openRecord = useCallback(
+    async (recordId: string, prefer: "latest" | "earliest" = "latest") => {
+      setError(null);
+      try {
+        const detail = await api.record(recordId);
+        setRecord(detail);
+        // Prefer a real review over the offline keyword baseline, which is a
+        // development diagnostic whose findings are deliberately crude —
+        // defaulting to it would show a reviewer output the product never
+        // produces. Fall back to it only if there is nothing else.
+        const complete = detail.runs.filter((r) => r.status === "complete");
+        const real = complete.filter((r) => !r.model.startsWith("keyword-"));
+        const pool = real.length > 0 ? real : complete;
+        // The API returns runs newest-first, so the earliest is the last one.
+        const chosen = (prefer === "earliest" ? pool[pool.length - 1] : pool[0]) ?? detail.runs[0];
+        if (chosen) {
+          setRunId(chosen.runId);
+          setFindings(await api.findings(chosen.runId));
+        } else {
+          setRunId(null);
+          setFindings([]);
+        }
+      } catch (e) {
+        if (e instanceof AuthError) return setUsername(null);
+        setError((e as Error).message);
       }
-    } catch (e) {
-      if (e instanceof AuthError) return setUsername(null);
-      setError((e as Error).message);
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (username) void refreshRecords();
   }, [username, refreshRecords]);
 
   /**
-   * Open the most recently reviewed document on arrival, so the findings page
-   * lands on something to read instead of a document picker.
+   * Open the *first* review on arrival, so the findings page lands on something
+   * to read instead of a document picker.
+   *
+   * First, not newest, and deliberately: the newest run is usually whatever was
+   * last being experimented with, so a landing view pinned to it changes every
+   * time anyone tries anything. The earliest reviewed document and its earliest
+   * real run is a stable, known first screen. Records arrive newest-activity
+   * first, so the earliest is the last one with a run.
    *
    * Once, guarded by a ref rather than by `record === null`. The record list is
    * refetched every time a review finishes, and without the guard that would
-   * yank whatever the reviewer was reading back to the newest document
-   * mid-sentence. It also must not fire again after the reviewer deliberately
-   * navigates elsewhere.
+   * yank whatever the reviewer was reading back mid-sentence. It also must not
+   * fire again after the reviewer deliberately navigates elsewhere.
    */
   const landed = useRef(false);
   useEffect(() => {
     if (landed.current || record) return;
-    const newest = records.find((r) => r.runs > 0);
-    if (!newest) return;
+    const reviewed = records.filter((r) => r.runs > 0);
+    const first = reviewed[reviewed.length - 1];
+    if (!first) return;
     landed.current = true;
-    void openRecord(newest.recordId);
+    void openRecord(first.recordId, "earliest");
   }, [records, record, openRecord]);
 
   /**
