@@ -29,7 +29,11 @@ export function App() {
   // out — kept distinct so the login screen doesn't flash before that check
   // resolves.
   const [username, setUsername] = useState<string | null | undefined>(undefined);
-  const [page, setPage] = useState<Page>("run");
+  // Land on the findings, not on the page that starts work. Reading a review is
+  // what a reviewer does most, and it's the half of the product that costs
+  // nothing to look at — the first screen shouldn't be a button that spends
+  // money. The newest reviewed document is opened automatically below.
+  const [page, setPage] = useState<Page>("findings");
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [record, setRecord] = useState<RecordDetail | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -88,6 +92,25 @@ export function App() {
   useEffect(() => {
     if (username) void refreshRecords();
   }, [username, refreshRecords]);
+
+  /**
+   * Open the most recently reviewed document on arrival, so the findings page
+   * lands on something to read instead of a document picker.
+   *
+   * Once, guarded by a ref rather than by `record === null`. The record list is
+   * refetched every time a review finishes, and without the guard that would
+   * yank whatever the reviewer was reading back to the newest document
+   * mid-sentence. It also must not fire again after the reviewer deliberately
+   * navigates elsewhere.
+   */
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || record) return;
+    const newest = records.find((r) => r.runs > 0);
+    if (!newest) return;
+    landed.current = true;
+    void openRecord(newest.recordId);
+  }, [records, record, openRecord]);
 
   /**
    * Re-attach to the server's reviews on load.

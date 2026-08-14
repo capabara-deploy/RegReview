@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Finding, FindingStatus, RecordDetail, RecordSummary, Severity } from "./api";
 import { dominant, segment, SEVERITY_MARK } from "./highlight";
 import { FindingPanel } from "./FindingPanel";
@@ -71,6 +71,26 @@ export function Findings({
 
   const selectedFinding = findings.find((f) => f.findingId === selected) ?? null;
   const currentRun = record?.runs.find((r) => r.runId === runId);
+
+  /**
+   * Open a finding automatically when a run's findings first arrive, so the page
+   * shows a worked example rather than a list to click.
+   *
+   * The most severe one, not the first. `loadFindings` orders by `char_start`,
+   * so "first" means whichever defect happens to appear earliest in the
+   * document — arbitrary with respect to how much it matters.
+   *
+   * Once per run, tracked by id: without that, closing the panel would
+   * immediately reopen it, and the reviewer could never see the list.
+   */
+  const autoOpened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runId || autoOpened.current === runId || visible.length === 0) return;
+    autoOpened.current = runId;
+    const rank: Record<Severity, number> = { high: 0, medium: 1, low: 2 };
+    const worst = [...visible].sort((a, b) => rank[a.severity] - rank[b.severity])[0]!;
+    setSelected(worst.findingId);
+  }, [runId, visible]);
 
   if (!record) {
     const reviewed = records.filter((r) => r.runs > 0);
