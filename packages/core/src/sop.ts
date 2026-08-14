@@ -195,6 +195,16 @@ export async function ingestSop(
      * would orphan its old rules under a new ID and leave two copies.
      */
     sopDocumentId?: string;
+    /**
+     * Override the label every clause is cited by. Normally the procedure's own
+     * document number is correct and this is left unset.
+     *
+     * It exists for the shipped sample procedures, whose citations must not be
+     * mistakable for the customer's own: a finding reading "QSP-0012 Rev 6 §8.2"
+     * asserts an obligation the customer actually signed, and one reading
+     * "SAMPLE-CAPA-001 Rev 1 §8.2" does not. See `sampleSops.ts`.
+     */
+    citationLabel?: string;
   },
   db: Db = getSopsDb(),
 ): Promise<SopIngestResult> {
@@ -271,7 +281,7 @@ export async function ingestSop(
         document.uploadedAt,
       );
 
-    const label = document.docId ?? document.filename;
+    const label = args.citationLabel ?? document.docId ?? document.filename;
     const currentIds = new Set<string>();
 
     for (const clause of clauses) {

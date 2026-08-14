@@ -104,6 +104,15 @@ Do this before reviewing anything. Until a procedure is loaded the conformance
 pass has no rules and **skips itself silently** — which means half the review is
 missing and the output still looks complete.
 
+A sops database that has never held a procedure is seeded on migrate with two
+sample procedures (`SAMPLE-CAPA-001`, `SAMPLE-RISK-001`) so that pass is never
+ruleless, and so a new user can see what a conformance finding looks like. They
+are hand-authored, cited as `SAMPLE-*` on every finding so they can't be mistaken
+for the customer's own, and **carry none of a real procedure's force** — the
+whole weight of a conformance finding is that the customer wrote the clause it
+cites. Replace them. `npm run sop -- --list` warns while samples are all that's
+loaded, and `REGREVIEW_SKIP_SAMPLE_SOPS=1` disables seeding.
+
 ```sh
 npm run sop -- packages/eval/fixtures/sop-qsp-0012-capa.md --applies-to capa
 npm run sop -- --list          # what's loaded

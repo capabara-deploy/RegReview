@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CORPUS_VERSION } from "../config.js";
+import { seedSampleSops } from "../sampleSops.js";
 import { getCorpusDb, getCustomerDb, getSopsDb } from "./index.js";
 import type { PgDb } from "./pgDb.js";
 
@@ -54,7 +55,13 @@ export async function migrateCustomer(): Promise<void> {
 }
 
 export async function migrateSops(): Promise<void> {
-  await runSchema(getSopsDb(), "sopsSchema.sql");
+  const db = getSopsDb();
+  await runSchema(db, "sopsSchema.sql");
+  // Seed the sample procedures if this database has never held one, so the
+  // conformance pass is never silently ruleless. A no-op on every subsequent
+  // call, including the server's migrate-on-boot. See sampleSops.ts for why a
+  // shipped procedure is both necessary and carefully labeled.
+  await seedSampleSops(db);
 }
 
 async function listTables(db: PgDb): Promise<string[]> {

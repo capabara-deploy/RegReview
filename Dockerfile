@@ -54,6 +54,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/packages/core/dist  packages/core/dist
 COPY --from=build /app/apps/server/dist    apps/server/dist
+# Not build output: `tsc` emits only .ts, so the sample procedures seeded on
+# first migrate have to be copied in explicitly. Without this the server boots,
+# migrates, finds no sample files, and the conformance pass runs ruleless until
+# someone uploads a procedure — which looks exactly like a clean review.
+COPY --from=build /app/packages/core/samples packages/core/samples
 COPY docker-entrypoint.sh                  ./
 
 # The rule corpus (packages/core/src/db/corpusSchema.sql and friends) lives in

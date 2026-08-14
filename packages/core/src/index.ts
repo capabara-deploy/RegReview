@@ -5,6 +5,7 @@ export * from "./engine.js";
 export * from "./extract/index.js";
 export * from "./store.js";
 export * from "./sop.js";
+export * from "./sampleSops.js";
 export * from "./facts.js";
 export * from "./runReview.js";
 export {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { migrateSops } from "../db/migrate.js";
+import { isSampleSop } from "../sampleSops.js";
 import { ingestSop, listSops } from "../sop.js";
 import { RecordType } from "../types.js";
 
@@ -31,7 +32,20 @@ async function main(): Promise<void> {
     for (const s of sops) {
       console.log(
         `  ${(s.docId ?? s.filename).padEnd(16)} Rev ${(s.revision ?? "?").padEnd(4)} ` +
-          `${String(s.ruleCount).padStart(3)} clauses  ${s.title ?? ""}`,
+          `${String(s.ruleCount).padStart(3)} clauses  ${s.title ?? ""}` +
+          `${isSampleSop(s.sopDocumentId) ? "  [SAMPLE]" : ""}`,
+      );
+    }
+
+    // Say this every time it is true. A sample procedure produces conformance
+    // findings that look exactly like real ones, and the whole force of a
+    // conformance finding is that the customer wrote the clause it cites.
+    if (sops.every((s) => isSampleSop(s.sopDocumentId))) {
+      console.log(
+        `\nOnly sample procedures are loaded. Conformance findings will cite\n` +
+          `SAMPLE-* clauses, which your company never wrote and is not bound by.\n` +
+          `They demonstrate the pass; do not act on them. Load your own:\n\n` +
+          `  npm run sop -- <your-procedure.md> --applies-to capa`,
       );
     }
     return;
