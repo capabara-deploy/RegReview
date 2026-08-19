@@ -19,6 +19,7 @@ Upload in this order so cross-references resolve. Set the record type shown
 - `qsp-0021-risk-management.md` — SOP, applies-to: risk_analysis
 - `qsp-0015-change-control.md` — SOP, applies-to: change_package
 - `qsp-0008-complaint-handling.md` — SOP, applies-to: complaint
+- `qsp-0025-production-controls.md` — SOP (Good Manufacturing Practice / 21 CFR 820 Subpart G), applies-to: change_package
 - `sop-qsp-0012-capa.md` — SOP, applies-to: capa *(existing)*
 
 **Design History File**
