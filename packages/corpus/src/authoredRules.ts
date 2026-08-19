@@ -555,9 +555,294 @@ const LOGIC_RULES: AuthoredRule[] = [
   },
 ];
 
+/**
+ * 21 CFR Part 820 / Part 803 requirements, keyed to the paragraph FDA actually
+ * cites. Unlike the CAPA and design clauses (which QMSR reserved and pushed into
+ * copyrighted ISO 13485), these paragraphs are US Government works: the legacy
+ * QSR text is public domain and still governs every historical record and every
+ * historical 483 citation. Every `expectation` here is nonetheless our own
+ * original prose describing what the paragraph requires — we do not paste
+ * regulation text either, both for consistency and because a plain-English
+ * expectation reviews better than a statute quotation.
+ *
+ * These fill the corpus's biggest empirical gaps: the requirements FDA cites
+ * most that the CAPA/risk rules did not cover — complaint handling (the #2
+ * device citation), process validation, purchasing controls, nonconforming
+ * product, acceptance activities, records, and MDR. `crosswalk` is the same
+ * paragraph, so each inherits its real inspection-citation frequency.
+ *
+ * `appliesTo` maps each rule to the record types a customer actually uploads and
+ * reviews. System-level requirements with no natural document home (management
+ * review, internal audit) are deliberately omitted — a rule that can fire on no
+ * record is dead weight and only muddies rule attribution.
+ */
+const FDA_QSR_RULES: AuthoredRule[] = [
+  {
+    ruleId: "cfr-820.198a-complaint-procedure",
+    citation: "21 CFR 820.198(a) (complaint files)",
+    title: "Complaints must be handled under a defined procedure and evaluated for reportability",
+    expectation:
+      "The record must show the complaint was processed through a defined complaint-handling " +
+      "system: received and recorded, evaluated for whether it represents an event that must " +
+      "be reported, and investigated where indicated. A complaint captured only as an informal " +
+      "note, or closed without a recorded evaluation of whether it needed reporting, does not " +
+      "demonstrate a controlled process even if the underlying issue was addressed.",
+    appliesTo: ["complaint"],
+    crosswalk: ["820.198(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.198c-complaint-reportability",
+    citation: "21 CFR 820.198(c) (complaints involving reportable events)",
+    title: "A complaint that may involve a reportable death or injury must record a reportability determination",
+    expectation:
+      "Where a complaint describes an event that may have caused or contributed to a death or " +
+      "serious injury, the record must document a specific determination of whether the event is " +
+      "reportable, with its basis, rather than leaving reportability unaddressed. Silence on " +
+      "reportability for an event that reaches a patient is itself the finding.",
+    appliesTo: ["complaint", "capa"],
+    crosswalk: ["820.198(c)", "820.198(e)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "cfr-803.17-mdr-procedure",
+    citation: "21 CFR 803.17 (written MDR procedures)",
+    title: "Medical device reporting decisions must follow a written procedure with timely evaluation",
+    expectation:
+      "The record must show that the decision about whether and when to file a medical device " +
+      "report was made under the firm's written MDR procedure — that the event was evaluated for " +
+      "reportability against defined criteria and within the required timeframe. An event that " +
+      "sits without an MDR decision, or a decision with no basis recorded, is a gap.",
+    appliesTo: ["complaint"],
+    crosswalk: ["803.17", "803.50(a)(1)", "803.50(a)(2)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "cfr-820.90a-nonconforming-control",
+    citation: "21 CFR 820.90(a) (control of nonconforming product)",
+    title: "Nonconforming product must be identified, evaluated, and controlled to prevent unintended use",
+    expectation:
+      "Where the record involves product that does not meet specification, it must show the " +
+      "nonconforming product was identified and controlled — documented, evaluated, and " +
+      "segregated or otherwise prevented from unintended use or distribution. Product found " +
+      "nonconforming with no recorded evaluation or disposition, or allowed to proceed without " +
+      "justification, is the finding.",
+    appliesTo: ["capa", "complaint", "change_package"],
+    crosswalk: ["820.90(a)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "cfr-820.90b-nonconforming-disposition",
+    citation: "21 CFR 820.90(b) (nonconformity review and disposition)",
+    title: "Nonconformity disposition, including any use-as-is or rework, must be documented and justified",
+    expectation:
+      "The disposition of a nonconformity must be recorded with its justification, and any " +
+      "concession to use nonconforming product as-is must name who authorized it and on what " +
+      "basis. Rework must be performed under a procedure assessed for adverse effect and the " +
+      "reworked product re-evaluated. A disposition asserted without justification, or a rework " +
+      "with no re-evaluation, does not close the loop.",
+    appliesTo: ["capa", "change_package"],
+    crosswalk: ["820.90(b)", "820.90(b)(2)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.75a-process-validation",
+    citation: "21 CFR 820.75(a) (process validation)",
+    title: "A process whose output cannot be fully verified must be validated with defined criteria",
+    expectation:
+      "Where a production process's results cannot be fully verified by later inspection or test, " +
+      "the record must show the process was validated: defined parameters and operating ranges, " +
+      "a defined number of runs, acceptance criteria established in advance, and approval by " +
+      "qualified personnel. A change to such a process that relies on assertion of equivalence, " +
+      "with no revalidation or documented rationale, is the finding.",
+    appliesTo: ["validation", "change_package"],
+    crosswalk: ["820.75(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.75b-process-monitoring",
+    citation: "21 CFR 820.75(b) (process control and monitoring)",
+    title: "A validated process must be monitored and revalidated when it changes",
+    expectation:
+      "A validated process must be controlled to its validated parameters, monitored, and " +
+      "revalidated when the process or its product specification changes. The record must show " +
+      "that a change to the process was assessed against the validated state and revalidated to " +
+      "the extent the assessment required, not applied on the assumption that a small change " +
+      "cannot matter.",
+    appliesTo: ["validation", "change_package"],
+    crosswalk: ["820.75(b)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.50-purchasing-controls",
+    citation: "21 CFR 820.50 (purchasing controls)",
+    title: "Suppliers of components and services must be evaluated and controlled to defined requirements",
+    expectation:
+      "Where the record depends on a supplier — a component, a contract process, a substituted " +
+      "part — it must show the supplier was evaluated against defined requirements and that the " +
+      "purchased item's requirements are specified. A supplier or part change accepted as " +
+      "'equivalent' with no recorded evaluation or requirement basis does not demonstrate " +
+      "control of purchasing.",
+    appliesTo: ["change_package", "capa"],
+    crosswalk: ["820.50", "820.50(a)", "820.50(a)(1)", "820.50(a)(3)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.80d-final-acceptance",
+    citation: "21 CFR 820.80(d) (final acceptance activities)",
+    title: "Finished product must pass defined final acceptance before release for distribution",
+    expectation:
+      "The record must show that finished product was not released until the activities required " +
+      "by the device master record were completed and the associated records reviewed and " +
+      "approved. Evidence that product shipped before its acceptance was complete — or that " +
+      "release criteria were waived without authority — is the finding.",
+    appliesTo: ["verification", "validation", "change_package"],
+    crosswalk: ["820.80(d)", "820.80(a)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "cfr-820.80e-acceptance-records",
+    citation: "21 CFR 820.80(e) (acceptance records)",
+    title: "Acceptance activities must be recorded with the equipment and personnel involved",
+    expectation:
+      "Acceptance activities must be documented so that the record shows what was accepted, the " +
+      "acceptance criteria, the equipment used, the date, and the individual performing the " +
+      "activity. An acceptance asserted without a locatable record, or a record missing the " +
+      "equipment or personnel, does not demonstrate the activity occurred as claimed.",
+    appliesTo: ["verification", "validation"],
+    crosswalk: ["820.80(e)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.72a-equipment-calibration",
+    citation: "21 CFR 820.72(a) (inspection, measuring, and test equipment)",
+    title: "Measuring and test equipment used to show conformance must be calibrated and traceable",
+    expectation:
+      "Where conformance is demonstrated using measuring or test equipment, the record must show " +
+      "the equipment was calibrated against a traceable standard at a defined interval. Equipment " +
+      "found out of calibration must trigger an assessment of the product accepted on its readings " +
+      "since the last valid calibration. A conformance claim resting on uncalibrated or " +
+      "unverified equipment is not supported.",
+    appliesTo: ["verification", "validation", "change_package"],
+    crosswalk: ["820.72(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.70a-production-controls",
+    citation: "21 CFR 820.70(a) (production and process controls)",
+    title: "Production processes affecting quality must be controlled to documented parameters",
+    expectation:
+      "Where the record involves a production process that can affect device quality, it must " +
+      "show the process is carried out under documented procedures that define the parameters and " +
+      "controls, and that those parameters are monitored and recorded where needed for " +
+      "conformance. A process change made outside a controlled procedure, or with parameters " +
+      "unspecified, is the finding.",
+    appliesTo: ["change_package", "validation"],
+    crosswalk: ["820.70(a)", "820.70(c)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.70i-automated-process-validation",
+    citation: "21 CFR 820.70(i) (automated processes)",
+    title: "Software used to automate a production or quality process must be validated for its intended use",
+    expectation:
+      "Where software controls or automates a production or quality-system process, the record " +
+      "must show that software was validated for its intended use, and revalidated after a change " +
+      "to it. Firmware or application-software changes credited with a quality function but not " +
+      "validated as software are a gap that FDA cites specifically.",
+    appliesTo: ["validation", "change_package", "verification"],
+    crosswalk: ["820.70(i)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.40-document-controls",
+    citation: "21 CFR 820.40 (document controls)",
+    title: "Controlled documents must be reviewed, approved, and current at point of use",
+    expectation:
+      "The record must show that the documents it relies on are controlled — approved before " +
+      "use, identified by revision, and current. A reference to a procedure or specification " +
+      "without a revision, or reliance on a document a later change should have superseded, " +
+      "undermines the record's traceability even when the underlying work was correct.",
+    appliesTo: ["change_package", "design_output"],
+    crosswalk: ["820.40", "820.40(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.184-device-history-record",
+    citation: "21 CFR 820.184 (device history record)",
+    title: "The device history record must show each unit or lot was made per the device master record",
+    expectation:
+      "Where the record concerns manufactured product, it must demonstrate a device history " +
+      "record exists showing the product was made in accordance with the device master record, " +
+      "including the acceptance records and the primary identification and control number. A " +
+      "unit or lot whose manufacturing conformance cannot be traced from its record is the " +
+      "finding.",
+    appliesTo: ["traceability_matrix", "design_output", "change_package"],
+    crosswalk: ["820.184"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.181-device-master-record",
+    citation: "21 CFR 820.181 (device master record)",
+    title: "The device master record must define the specifications and procedures the product is built to",
+    expectation:
+      "The record must trace to a device master record that defines the device's specifications, " +
+      "production process, quality-assurance procedures, and labeling. A design output or change " +
+      "that is not reflected back into the device master record leaves production building to a " +
+      "specification the record no longer matches.",
+    appliesTo: ["design_output", "traceability_matrix", "change_package"],
+    crosswalk: ["820.181"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.250-statistical-techniques",
+    citation: "21 CFR 820.250 (statistical techniques)",
+    title: "Sampling plans and statistical methods must be valid for their purpose and justified",
+    expectation:
+      "Where the record relies on a sample — an acceptance sample, an effectiveness check, a " +
+      "validation run count — the sample size and method must be justified with respect to what " +
+      "it is meant to detect. A sample of convenience ('5 units', 'a few lots') offered as " +
+      "evidence, with no rationale tying it to the failure rate or confidence required, does not " +
+      "support the conclusion drawn from it.",
+    appliesTo: ["capa", "validation", "verification"],
+    crosswalk: ["820.250(b)", "820.250"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.30g-design-validation",
+    citation: "21 CFR 820.30(g) (design validation)",
+    title: "Design validation must show the device meets user needs and intended uses under actual or simulated use",
+    expectation:
+      "Design validation must demonstrate that the device conforms to defined user needs and " +
+      "intended uses, under actual or simulated use conditions, on initial production units or " +
+      "their equivalents, and must include risk analysis where appropriate. Validation that only " +
+      "confirms the output met the input specification (that is verification, not validation), or " +
+      "that omits the actual-use dimension, does not satisfy the requirement. (Under QMSR this " +
+      "requirement now enters via ISO 13485 7.3.7; the legacy paragraph still governs historical " +
+      "records and is where FDA's citation history sits.)",
+    appliesTo: ["validation", "design_review"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "cfr-820.25b-personnel-training",
+    citation: "21 CFR 820.25(b) (personnel training)",
+    title: "Personnel performing a controlled activity must be trained, with the training recorded",
+    expectation:
+      "Where the record depends on a person having performed a controlled activity — an " +
+      "inspection, a rework, a validated process step — it must show that person was trained for " +
+      "it and that the training is recorded. A corrective action whose control is 'retraining' " +
+      "with no record of who was trained, when, or against what, is not verifiable.",
+    appliesTo: ["capa", "change_package"],
+    crosswalk: ["820.25(b)"],
+    harmLinked: false,
+  },
+];
+
 export const AUTHORED_RULES: AuthoredRule[] = [
   ...CAPA_RULES,
   ...RISK_MANAGEMENT_RULES,
+  ...FDA_QSR_RULES,
   ...LOGIC_RULES,
 ];
 
@@ -566,10 +851,17 @@ export const AUTHORED_RULES: AuthoredRule[] = [
  * `iso_clause` (our prose against a copyrighted standard's clause ID);
  * cross-cutting soundness checks are `logic`.
  */
-export function sourceFor(rule: AuthoredRule): "iso_clause" | "logic" {
-  return rule.ruleId.startsWith("iso13485-") ||
+export function sourceFor(rule: AuthoredRule): "iso_clause" | "cfr" | "guidance" | "logic" {
+  // Public-domain 21 CFR requirements (our prose, keyed to the paragraph).
+  if (rule.ruleId.startsWith("cfr-")) return "cfr";
+  // Public-domain FDA guidance documents (our prose, keyed to the guidance).
+  if (rule.ruleId.startsWith("guidance-")) return "guidance";
+  // Copyrighted standards, referenced by clause id only — never their text.
+  if (
+    rule.ruleId.startsWith("iso13485-") ||
     rule.ruleId.startsWith("iso14971-") ||
     /ISO 1(3485|4971)/.test(rule.citation)
-    ? "iso_clause"
-    : "logic";
+  )
+    return "iso_clause";
+  return "logic";
 }
