@@ -837,6 +837,107 @@ const FDA_QSR_RULES: AuthoredRule[] = [
     crosswalk: ["820.25(b)"],
     harmLinked: false,
   },
+  {
+    ruleId: "cfr-820.30e-design-review",
+    citation: "21 CFR 820.30(e) (design review)",
+    title: "Formal design reviews must occur at planned stages and include an independent reviewer",
+    expectation:
+      "The record must show formal, documented design reviews at the planned development stages, " +
+      "each including a reviewer who has no direct responsibility for the design stage under " +
+      "review. A review that is only an approval signature, or that has no independent " +
+      "participant, does not satisfy the requirement even where the design was sound. (Under QMSR " +
+      "this enters via ISO 13485 7.3.5; the legacy paragraph still governs historical records and " +
+      "carries the citation history.)",
+    appliesTo: ["design_review"],
+    crosswalk: ["820.30(e)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.30f-design-verification",
+    citation: "21 CFR 820.30(f) (design verification)",
+    title: "Design verification must confirm that design outputs meet design inputs",
+    expectation:
+      "The record must show that each design output was verified against its design input with " +
+      "objective evidence — that the device as designed meets the requirements it was designed to. " +
+      "Flag design inputs with no corresponding verification, verification that tests something " +
+      "other than the input it claims to satisfy, and a design declared complete while a required " +
+      "verification is open. (Under QMSR this enters via ISO 13485 7.3.6.)",
+    appliesTo: ["verification", "design_output", "design_review"],
+    crosswalk: ["820.30(f)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.30h-design-transfer",
+    citation: "21 CFR 820.30(h) (design transfer)",
+    title: "The design must be correctly translated into production specifications",
+    expectation:
+      "The record must show that the design was transferred to production through specifications " +
+      "that correctly reflect the verified and validated design — that what is built matches what " +
+      "was designed and approved. A change that reaches production without a corresponding, " +
+      "approved production specification, or a production spec that diverges from the design " +
+      "output, is the finding. (Under QMSR this enters via ISO 13485 7.3.8.)",
+    appliesTo: ["design_output", "change_package", "traceability_matrix"],
+    crosswalk: ["820.30(h)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.30j-design-history-file",
+    citation: "21 CFR 820.30(j) (design history file)",
+    title: "A design history file must demonstrate the design was developed per the design plan",
+    expectation:
+      "The record must trace to a design history file that shows the design was developed in " +
+      "accordance with the approved design plan — the inputs, outputs, reviews, verification, and " +
+      "validation, assembled so an investigator can follow the design from need to released " +
+      "device. A design record that cannot demonstrate it followed its own plan is the finding. " +
+      "(Under QMSR the design file requirement enters via ISO 13485 7.3.10.)",
+    appliesTo: ["traceability_matrix", "design_review", "design_output"],
+    crosswalk: ["820.30(j)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.80b-receiving-acceptance",
+    citation: "21 CFR 820.80(b) (receiving acceptance activities)",
+    title: "Incoming product and components must be accepted before use",
+    expectation:
+      "Where the record depends on a purchased component or material, it must show that incoming " +
+      "product was inspected, tested, or otherwise verified as conforming before it was used or " +
+      "installed. A substituted or received part put into product with no recorded receiving " +
+      "acceptance is the finding, especially where the part sits in a safety-relevant path.",
+    appliesTo: ["verification", "change_package"],
+    crosswalk: ["820.80(b)", "820.80(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.120-device-labeling",
+    citation: "21 CFR 820.120 (device labeling)",
+    title: "Labeling must be examined for correctness and controlled against mix-up",
+    expectation:
+      "Where the record involves labeling — an IFU, a warning, a label — it must show the labeling " +
+      "was examined for correctness against the approved version and controlled so the right " +
+      "labeling reaches the right device. Flag a labeling change released without a recorded " +
+      "correctness check, and any conflict between the labeling and the device's approved " +
+      "specifications or risk controls.",
+    appliesTo: ["design_output", "validation"],
+    crosswalk: ["820.120"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-806-corrections-removals",
+    citation: "21 CFR Part 806 (reports of corrections and removals)",
+    title: "A field correction or removal to reduce a health risk must be evaluated for reportability",
+    expectation:
+      "Where the record describes a field action — a correction, a removal, a field advisory, an " +
+      "action applied to distributed product — it must show the action was evaluated for whether " +
+      "it is a correction or removal reportable under Part 806, with the determination and its " +
+      "basis recorded. A change applied to fielded units to address a safety issue, with no " +
+      "reportability evaluation, is the finding.",
+    appliesTo: ["capa", "change_package", "complaint"],
+    // Part 806 reportability has no representative paragraph in the 820
+    // inspection-observation data, so it inherits no borrowed frequency; its
+    // severity rests on the harm link, honestly, rather than on CAPA's count.
+    crosswalk: [],
+    harmLinked: true,
+  },
 ];
 
 /**
@@ -945,6 +1046,36 @@ const GUIDANCE_RULES: AuthoredRule[] = [
       "manufacturer's to make.",
     appliesTo: ["change_package"],
     crosswalk: ["820.30(i)", "820.40"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-cybersecurity",
+    citation: "FDA Cybersecurity in Medical Devices premarket guidance (final, 2026); FD&C Act §524B",
+    title: "A device with software or connectivity must manage cybersecurity risk and keep it current",
+    expectation:
+      "Where a device includes software, firmware, or a network or data interface, the record must " +
+      "show cybersecurity risk was managed as part of design and risk management: a threat model, " +
+      "a software bill of materials, security controls traced to identified risks, and a plan to " +
+      "monitor and update them over the device's life. Since 2023 FDA may refuse a submission for " +
+      "a cyber device that lacks this content; a software or connected device whose risk file is " +
+      "silent on cybersecurity is the finding.",
+    appliesTo: ["design_review", "design_input", "risk_analysis", "validation"],
+    crosswalk: ["820.30(g)", "820.30(c)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-pccp",
+    citation: "FDA Predetermined Change Control Plans for Medical Devices (final, Dec 2024)",
+    title: "A predetermined change control plan must specify the changes, the protocol, and the cumulative impact",
+    expectation:
+      "Where the record relies on a predetermined change control plan to make changes without a " +
+      "new submission, the plan must contain all three parts FDA requires: a description of the " +
+      "specific modifications allowed, a modification protocol defining how each is verified and " +
+      "validated, and an impact assessment addressing how each modification affects safety, " +
+      "effectiveness, and the others — including the cumulative impact of all the modifications " +
+      "together. A plan missing the protocol or the cumulative-impact analysis is the finding.",
+    appliesTo: ["change_package"],
+    crosswalk: ["820.30(i)"],
     harmLinked: false,
   },
 ];
