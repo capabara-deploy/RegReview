@@ -2,6 +2,76 @@ export type Severity = "high" | "medium" | "low";
 export type FindingStatus = "open" | "accepted" | "rejected";
 export type Confidence = "high" | "medium" | "low";
 
+// --- Cumulative change ledger ---
+export type ChangeType =
+  | "software"
+  | "labeling"
+  | "material"
+  | "component"
+  | "geometry"
+  | "performance_spec"
+  | "risk_control"
+  | "manufacturing_process"
+  | "other";
+export type Determination = "undecided" | "letter_to_file" | "new_submission";
+
+export interface Baseline {
+  baselineId: string;
+  device: string;
+  clearanceId: string;
+  clearedAt: string | null;
+  configuration: Record<string, string>;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface ImplicatedBranch {
+  chart: "main" | "software";
+  step: string;
+  consider: string;
+}
+
+export interface Change {
+  changeId: string;
+  baselineId: string;
+  proposal: string;
+  comparator: string | null;
+  changeType: ChangeType;
+  subsystem: string | null;
+  determination: Determination;
+  status: "proposed" | "implemented" | "superseded";
+  recordId: string | null;
+  changedAt: string | null;
+  createdAt: string;
+  /** Attached by the assessment endpoint: branches to consider for this type. */
+  branches?: ImplicatedBranch[];
+}
+
+export interface ChangeGap {
+  gapId: string;
+  changeId: string;
+  origin: "deterministic" | "inferred";
+  kind: string;
+  detail: string;
+  status: "open" | "accepted" | "dismissed";
+}
+
+export interface SubsystemCluster {
+  subsystem: string;
+  changeIds: string[];
+  count: number;
+}
+
+export interface CumulativeAssessment {
+  baseline: Baseline;
+  totalChanges: number;
+  clusters: SubsystemCluster[];
+  typesPresent: ChangeType[];
+  gaps: ChangeGap[];
+  undecided: number;
+  changes: Change[];
+}
+
 export interface SeverityBasis {
   citationFrequency: number;
   frequencyPercentile: number;
@@ -277,4 +347,29 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   deleteSop: (sopId: string) => json<void>(`/api/sops/${sopId}`, { method: "DELETE" }),
+
+  // Cumulative change ledger. Note there is deliberately no method that returns
+  // a submit / don't-submit determination — the tool never computes one.
+  baselines: () => json<Baseline[]>("/api/baselines"),
+  createBaseline: (body: {
+    device: string;
+    clearanceId: string;
+    clearedAt?: string;
+    note?: string;
+  }) => json<Baseline>("/api/baselines", { method: "POST", body: JSON.stringify(body) }),
+  assessment: (baselineId: string) =>
+    json<CumulativeAssessment>(`/api/baselines/${baselineId}/assessment`),
+  addChange: (
+    baselineId: string,
+    body: { proposal: string; comparator?: string; changeType?: ChangeType; subsystem?: string; changedAt?: string },
+  ) =>
+    json<Change>(`/api/baselines/${baselineId}/changes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  setDetermination: (changeId: string, determination: Determination) =>
+    json<Change>(`/api/changes/${changeId}/determination`, {
+      method: "PATCH",
+      body: JSON.stringify({ determination }),
+    }),
 };

@@ -1599,3 +1599,35 @@ body {
     max-height: 50vh;
   }
 }
+
+/* --- Cumulative change ledger --- */
+.ledger { padding: 1rem 1.25rem; max-width: 960px; margin: 0 auto; }
+.ledger-bar { margin-bottom: 1rem; }
+.ledger-bar select, .determination, .add-change select { padding: 0.4rem; border-radius: 6px; }
+.ledger-summary { display: flex; gap: 1.5rem; padding: 0.75rem 1rem; background: var(--panel, #f6f7f9);
+  border-radius: 8px; margin-bottom: 1rem; }
+.ls-num { font-size: 1.3rem; font-weight: 700; }
+.ledger-clusters { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-bottom: 1rem; }
+.cluster-hot { background: #fde8e8; border-color: #f5b5b5; font-weight: 600; }
+.ledger-gaps { margin-bottom: 1rem; }
+.gap-row { display: flex; gap: 0.6rem; padding: 0.5rem 0.75rem; background: #fff6e5; border-left: 3px solid #e0a020;
+  border-radius: 4px; margin: 0.3rem 0; font-size: 0.9rem; }
+.gap-aggregate { background: #fdeaea; border-left-color: #cc2b2b; }
+.gap-kind { font-weight: 700; white-space: nowrap; }
+.change-row { border: 1px solid var(--border, #e2e4e8); border-radius: 8px; padding: 0.75rem 1rem; margin: 0.6rem 0; }
+.change-row.has-gap { border-left: 3px solid #e0a020; }
+.change-head { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.change-date { font-variant-numeric: tabular-nums; color: var(--muted, #667); font-size: 0.85rem; }
+.change-subsystem { font-size: 0.85rem; color: var(--muted, #667); }
+.determination { margin-left: auto; }
+.change-proposal { margin: 0.4rem 0 0.2rem; }
+.change-comparator { font-size: 0.82rem; color: var(--muted, #667); }
+.branch-toggle { background: none; border: none; color: var(--accent, #2a6); cursor: pointer; padding: 0.3rem 0; font-size: 0.85rem; }
+.branch-row { font-size: 0.85rem; padding: 0.25rem 0 0.25rem 0.75rem; color: var(--muted, #445); }
+.ledger-disclaimer { margin: 1rem 0; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--panel, #f6f7f9); }
+.add-change, .create-baseline { border: 1px dashed var(--border, #ccd); border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+.add-change textarea, .create-baseline input { width: 100%; padding: 0.5rem; margin: 0.3rem 0; border-radius: 6px; box-sizing: border-box; }
+.add-change-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin: 0.4rem 0; }
+.add-change-actions { display: flex; gap: 0.5rem; }
+.add-change-btn { margin-top: 1rem; }
+button.secondary { background: transparent; }

@@ -18,17 +18,26 @@ import {
 } from "./auth.js";
 import { consumeQuota, ensureQuotaIndexes, initQuota, peekQuota, resetQuota } from "./quota.js";
 import {
+  addChange,
   categoriesForRules,
+  ChangeType,
   config,
+  createBaseline,
+  cumulativeAssessment,
   deleteSop,
+  Determination,
   detectFormat,
   extractRecord,
   FindingStatus,
+  getBaseline,
   getCorpusDb,
   getCustomerDb,
   getSopsDb,
   getSop,
+  implicatedBranches,
   ingestSop,
+  listBaselines,
+  listChanges,
   listSops,
   loadFindings,
   loadRulesFor,
@@ -38,6 +47,7 @@ import {
   RecordType,
   runReview,
   saveRecord,
+  setDetermination,
   setFindingStatus,
   updateSop,
   type Block,
@@ -438,6 +448,74 @@ app.patch("/api/runs/:runId/findings/:findingId", async (req, res) => {
   });
 
   const updated = (await loadFindings(runId)).find((f: Finding) => f.findingId === findingId);
+  res.json(updated);
+});
+
+// ---------------------------------------------------------------------------
+// Cumulative change ledger (Phase 2).
+//
+// Every write here is a flag or a human input. The one thing this API will
+// never expose is an endpoint that returns a submit / don't-submit
+// determination — that is the manufacturer's call, and no route computes it.
+// ---------------------------------------------------------------------------
+
+app.get("/api/baselines", async (_req, res) => {
+  res.json(await listBaselines());
+});
+
+const BaselineBody = z.object({
+  device: z.string().min(1),
+  clearanceId: z.string().min(1),
+  clearedAt: z.string().optional(),
+  configuration: z.record(z.string()).optional(),
+  note: z.string().optional(),
+});
+
+app.post("/api/baselines", async (req, res) => {
+  const parsed = BaselineBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  res.status(201).json(await createBaseline(parsed.data));
+});
+
+/** A baseline's changes and the deterministic cumulative assessment over them. */
+app.get("/api/baselines/:baselineId/assessment", async (req, res) => {
+  const baseline = await getBaseline(req.params.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+  const changes = await listChanges(baseline.baselineId);
+  const assessment = cumulativeAssessment(baseline, changes);
+  // Attach, per change, the flowchart branches its type implicates — questions
+  // to consider, never answers.
+  res.json({
+    ...assessment,
+    changes: changes.map((c) => ({ ...c, branches: implicatedBranches(c.changeType) })),
+  });
+});
+
+const ChangeBody = z.object({
+  proposal: z.string().min(1),
+  comparator: z.string().optional(),
+  changeType: ChangeType.optional(),
+  subsystem: z.string().optional(),
+  changedAt: z.string().optional(),
+});
+
+app.post("/api/baselines/:baselineId/changes", async (req, res) => {
+  const baseline = await getBaseline(req.params.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+  const parsed = ChangeBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  res.status(201).json(await addChange({ baselineId: baseline.baselineId, ...parsed.data }));
+});
+
+// The ONLY writer of a change's regulatory determination, and it takes it
+// straight from the human. The tool never sets this.
+const DeterminationBody = z.object({ determination: Determination });
+
+app.patch("/api/changes/:changeId/determination", async (req, res) => {
+  const parsed = DeterminationBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const updated = await setDetermination(req.params.changeId, parsed.data.determination);
+  if (!updated) return res.status(404).json({ error: "change not found" });
   res.json(updated);
 });
 

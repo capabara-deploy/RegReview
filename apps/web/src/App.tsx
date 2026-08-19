@@ -8,12 +8,13 @@ import {
   type RecordDetail,
   type RecordSummary,
 } from "./api";
+import { ChangeLedger } from "./ChangeLedger";
 import { Findings } from "./Findings";
 import { Login } from "./Login";
 import { Procedures } from "./Procedures";
 import { RunReview } from "./RunReview";
 
-type Page = "run" | "findings" | "procedures";
+type Page = "run" | "findings" | "procedures" | "changes";
 
 /**
  * The shell: navigation, the record/run the findings view is showing, and the
@@ -305,6 +306,12 @@ export function App() {
           >
             Procedures
           </button>
+          <button
+            className={`viewtab ${page === "changes" ? "on" : ""}`}
+            onClick={() => setPage("changes")}
+          >
+            Changes
+          </button>
         </nav>
 
         <button className="signout-btn" onClick={() => void signOut()}>
@@ -337,6 +344,8 @@ export function App() {
       )}
 
       {page === "procedures" && <Procedures onChanged={refreshRecords} />}
+
+      {page === "changes" && <ChangeLedger onAuthError={() => setUsername(null)} />}
     </div>
   );
 }
