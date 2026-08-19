@@ -35,6 +35,67 @@ const SOURCE_GROUPS: { key: string; label: string; sources: string[] }[] = [
 ];
 
 /**
+ * Second-level topics for the standards group.
+ *
+ * The corpus is large enough now (100+ rules) that a flat list is unusable, so
+ * within "FDA & standards" the rules are grouped by regulatory area — a
+ * sub-dropdown per topic. The order is the one a quality reader expects, roughly
+ * the shape of a quality system from CAPA out to device-specific testing.
+ */
+const TOPIC_ORDER = [
+  "CAPA",
+  "Complaints & MDR",
+  "Risk management",
+  "Design controls",
+  "Software, AI & connectivity",
+  "Production & process",
+  "Purchasing & acceptance",
+  "Records, traceability & distribution",
+  "Sterility, materials & biocompatibility",
+  "Physical & electrical safety",
+  "In-vitro diagnostics",
+  "Clinical & postmarket",
+  "Labeling & identification",
+  "Device families",
+  "Other requirements",
+] as const;
+
+/** Map a rule to its topic from its id and citation. Deterministic, no model. */
+function topicFor(rule: { ruleId: string; citation: string }): string {
+  const id = rule.ruleId;
+  const has = (...ps: string[]) => ps.some((p) => id.includes(p));
+
+  if (has("8.5.2", "8.5.3", "regreview-capa")) return "CAPA";
+  if (has("820.198", "-803", "-806", "complaint-source", "complaint-reportability"))
+    return "Complaints & MDR";
+  if (has("iso14971", "risk-rating-consistency", "safety-assurance", "benefit-risk"))
+    return "Risk management";
+  if (
+    has("820.30", "design-plan", "design-input", "human-factors", "change-assessment") &&
+    !has("820.30(i)")
+  )
+    return "Design controls";
+  if (has("software", "-ai-", "samd", "interoperability", "cybersecurity", "820.70i", "pccp", "820.30(i)"))
+    return "Software, AI & connectivity";
+  if (has("820.75", "820.70", "820.72", "820.25", "820.40")) return "Production & process";
+  if (has("820.50", "820.80", "820.90")) return "Purchasing & acceptance";
+  if (has("820.184", "820.181", "820.65", "820.160", "820.170", "820.200"))
+    return "Records, traceability & distribution";
+  if (has("biocompat", "chemical", "steriliz", "packaging", "reprocess", "particulate"))
+    return "Sterility, materials & biocompatibility";
+  if (
+    has("electrical", "wireless", "mr-safety", "mechanical", "alarm", "battery", "fluid-path", "energy-device", "radiation")
+  )
+    return "Physical & electrical safety";
+  if (has("-ivd-")) return "In-vitro diagnostics";
+  if (has("clinical", "-ide-", "postmarket", "real-world")) return "Clinical & postmarket";
+  if (has("-801", "-830", "labeling", "home-use", "pediatric")) return "Labeling & identification";
+  if (has("cardiovascular", "orthopedic", "drug-delivery", "combination", "infusion-pump"))
+    return "Device families";
+  return "Other requirements";
+}
+
+/**
  * Which check passes a rule selection will run. Mirrors `categoriesForRules` in
  * runReview.ts, duplicated rather than fetched because it drives only the cost
  * estimate shown before the run — a round-trip to price a checkbox would make
@@ -81,6 +142,9 @@ export function RunReview({
   const [allRules, setAllRules] = useState<CorpusRule[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showRules, setShowRules] = useState(false);
+  // Which topic sub-dropdowns are expanded, and the rule search box.
+  const [openTopics, setOpenTopics] = useState<Set<string>>(new Set());
+  const [ruleQuery, setRuleQuery] = useState("");
 
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState("capa");
@@ -611,6 +675,13 @@ export function RunReview({
 
         {showRules && (
           <div className="rc-rules">
+            <input
+              className="rc-rule-search"
+              type="search"
+              placeholder="Search rules by name or citation…"
+              value={ruleQuery}
+              onChange={(e) => setRuleQuery(e.target.value)}
+            />
             {groups.map((g) => {
               const on = g.usable.filter((r) => selected.has(r.ruleId)).length;
               const blocked = g.usable.length === 0;
@@ -660,31 +731,102 @@ export function RunReview({
                     </div>
                   )}
 
-                  {g.rules.map((r) => {
-                    const usable = g.usable.includes(r);
-                    return (
-                      <label
-                        key={r.ruleId}
-                        className={`rc-rule ${usable ? "" : "off"}`}
-                        title={
-                          usable
-                            ? undefined
-                            : `Applies to ${r.appliesTo.join(", ")} — not ${typeLabel}`
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={usable && selected.has(r.ruleId)}
-                          disabled={!usable}
-                          onChange={() => toggleRule(r.ruleId)}
-                        />
-                        <span className="rc-rule-body">
-                          <span className="rc-rule-title">{r.title}</span>
-                          <span className="rc-rule-cite">{r.citation}</span>
-                        </span>
-                      </label>
-                    );
-                  })}
+                  {(() => {
+                    const q = ruleQuery.trim().toLowerCase();
+                    const match = (r: CorpusRule) =>
+                      !q ||
+                      r.title.toLowerCase().includes(q) ||
+                      r.citation.toLowerCase().includes(q);
+
+                    const visible = g.rules.filter(match);
+                    if (q && visible.length === 0) return null;
+
+                    // Partition this group's visible rules into topic sub-groups,
+                    // ordered as TOPIC_ORDER. A group whose rules all fall in one
+                    // topic (Your procedures, Logic) renders as a single flat list.
+                    const byTopic = new Map<string, CorpusRule[]>();
+                    for (const r of visible) {
+                      const t = topicFor(r);
+                      if (!byTopic.has(t)) byTopic.set(t, []);
+                      byTopic.get(t)!.push(r);
+                    }
+                    const subs = [...TOPIC_ORDER, "Other requirements"]
+                      .filter((t, i, a) => a.indexOf(t) === i && byTopic.has(t))
+                      .map((t) => ({ topic: t, rules: byTopic.get(t)! }));
+                    const flat = subs.length <= 1;
+
+                    const renderRule = (r: CorpusRule) => {
+                      const usable = g.usable.includes(r);
+                      return (
+                        <label
+                          key={r.ruleId}
+                          className={`rc-rule ${usable ? "" : "off"}`}
+                          title={
+                            usable ? undefined : `Applies to ${r.appliesTo.join(", ")} — not ${typeLabel}`
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={usable && selected.has(r.ruleId)}
+                            disabled={!usable}
+                            onChange={() => toggleRule(r.ruleId)}
+                          />
+                          <span className="rc-rule-body">
+                            <span className="rc-rule-title">{r.title}</span>
+                            <span className="rc-rule-cite">{r.citation}</span>
+                          </span>
+                        </label>
+                      );
+                    };
+
+                    if (flat) return visible.map(renderRule);
+
+                    return subs.map((sub) => {
+                      // A search auto-opens matching topics; otherwise the reader
+                      // opens them. Keeps a 100-rule list to one screen of headers.
+                      const open = q !== "" || openTopics.has(g.key + "|" + sub.topic);
+                      const usableInSub = sub.rules.filter((r) => g.usable.includes(r));
+                      const onInSub = usableInSub.filter((r) => selected.has(r.ruleId)).length;
+                      return (
+                        <div key={sub.topic} className="rc-subgroup">
+                          <div className="rc-subgroup-head">
+                            <button
+                              className="rc-subgroup-toggle"
+                              onClick={() =>
+                                setOpenTopics((prev) => {
+                                  const next = new Set(prev);
+                                  const k = g.key + "|" + sub.topic;
+                                  next.has(k) ? next.delete(k) : next.add(k);
+                                  return next;
+                                })
+                              }
+                            >
+                              <span className="rc-chevron">{open ? "▾" : "▸"}</span>
+                              {sub.topic}
+                              <span className="rc-badge">
+                                {onInSub}/{usableInSub.length}
+                              </span>
+                            </button>
+                            <button
+                              className="rc-mini"
+                              disabled={usableInSub.length === 0}
+                              onClick={() => setGroup(usableInSub, true)}
+                            >
+                              all
+                            </button>
+                            <button
+                              className="rc-mini"
+                              disabled={usableInSub.length === 0}
+                              onClick={() => setGroup(usableInSub, false)}
+                            >
+                              none
+                            </button>
+                          </div>
+                          {open && <div className="rc-subgroup-rules">{sub.rules.map(renderRule)}</div>}
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               );
             })}

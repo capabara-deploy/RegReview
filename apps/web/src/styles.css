@@ -1644,3 +1644,15 @@ button.secondary { background: transparent; }
 .gm-edges { list-style: none; padding: 0; margin: 0.75rem 0 0; font-size: 0.85rem; }
 .gm-edges li { padding: 0.35rem 0; border-bottom: 1px solid var(--border, #eef); }
 .gm-kind { font-weight: 600; color: #2b6cb0; }
+
+/* --- Run-review rule selector: search + topic sub-groups --- */
+.rc-rule-search { width: 100%; padding: 0.45rem 0.6rem; margin-bottom: 0.6rem; border: 1px solid var(--border, #d3d7de);
+  border-radius: 6px; box-sizing: border-box; font-size: 0.9rem; }
+.rc-subgroup { border-top: 1px solid var(--border, #eef); }
+.rc-subgroup:first-child { border-top: none; }
+.rc-subgroup-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.15rem 0; }
+.rc-subgroup-toggle { flex: 1; display: flex; align-items: center; gap: 0.45rem; background: none; border: none;
+  cursor: pointer; text-align: left; font-size: 0.86rem; font-weight: 600; color: var(--text, #223); padding: 0.3rem 0.2rem; }
+.rc-subgroup-toggle:hover { color: var(--accent, #2b6cb0); }
+.rc-chevron { width: 0.9em; display: inline-block; color: var(--muted, #889); }
+.rc-subgroup-rules { padding-left: 1.3rem; }
