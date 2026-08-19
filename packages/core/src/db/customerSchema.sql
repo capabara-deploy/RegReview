@@ -144,3 +144,73 @@ CREATE TABLE IF NOT EXISTS finding_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_finding ON finding_events(run_id, finding_id, event_id);
+
+-- ---------------------------------------------------------------------------
+-- Cumulative change ledger (Phase 2).
+--
+-- The reshaped form of the "informal submission" feature. An engineer records a
+-- proposed change in free text; the tool computes DETERMINISTIC gaps and which
+-- decision-flowchart branches are implicated, and it NEVER renders the
+-- submit / don't-submit determination — that is the manufacturer's statutory
+-- responsibility (21 CFR 807.81(a)(3)). The regulatory determination is a
+-- human-owned column that defaults to undecided and is never set by the tool.
+-- ---------------------------------------------------------------------------
+
+-- The cleared-device comparator. A change assessment must compare against the
+-- most-recently-cleared configuration (its 510(k) number), not an intervening
+-- internal revision; that wrong-comparator error is deterministically checkable.
+CREATE TABLE IF NOT EXISTS baselines (
+  baseline_id   TEXT PRIMARY KEY,
+  device        TEXT NOT NULL,
+  clearance_id  TEXT NOT NULL,
+  cleared_at    TEXT,
+  -- Cleared configuration attributes as JSON, e.g. {"software":"3.1.4"}.
+  configuration TEXT NOT NULL DEFAULT '{}',
+  note          TEXT,
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_baselines_device ON baselines(device);
+
+-- A proposed or recorded change against a baseline.
+CREATE TABLE IF NOT EXISTS changes (
+  change_id     TEXT PRIMARY KEY,
+  baseline_id   TEXT NOT NULL REFERENCES baselines(baseline_id) ON DELETE CASCADE,
+  -- Free text as the engineer typed it. Provenance for extracted change-facts,
+  -- NOT a grounded controlled-document quote (see change_gaps).
+  proposal      TEXT NOT NULL,
+  -- What the change was compared against, as written ("v4.1", "K192214").
+  comparator    TEXT,
+  change_type   TEXT NOT NULL DEFAULT 'other',
+  -- Subsystem/function touched, for cumulative clustering.
+  subsystem     TEXT,
+  -- Human-owned regulatory determination. NEVER set by the tool.
+  determination TEXT NOT NULL DEFAULT 'undecided'
+                  CHECK (determination IN ('undecided','letter_to_file','new_submission')),
+  status        TEXT NOT NULL DEFAULT 'proposed'
+                  CHECK (status IN ('proposed','implemented','superseded')),
+  -- Link to a real record once the change graduates to a drafted document.
+  record_id     TEXT,
+  changed_at    TEXT,
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_changes_baseline ON changes(baseline_id, changed_at);
+
+-- Gaps found on a change. Deterministic gaps are code-computed and citable;
+-- inferred gaps are model suggestions requiring human acceptance. Kept OUT of
+-- `findings` on purpose: a proposed change has no controlled-document text to
+-- quote, so these are not protected by the hallucination guard, must never
+-- carry a severity tier, and must never enter the findings surface.
+CREATE TABLE IF NOT EXISTS change_gaps (
+  gap_id     TEXT PRIMARY KEY,
+  change_id  TEXT NOT NULL REFERENCES changes(change_id) ON DELETE CASCADE,
+  origin     TEXT NOT NULL CHECK (origin IN ('deterministic','inferred')),
+  kind       TEXT NOT NULL,
+  detail     TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'open'
+               CHECK (status IN ('open','accepted','dismissed')),
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_gaps_change ON change_gaps(change_id);

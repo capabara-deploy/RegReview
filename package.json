@@ -36,7 +36,8 @@
     "sop": "node --env-file-if-exists=.env --import tsx packages/core/src/cli/ingestSop.ts",
     "rules:report": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/corpus/src/cli/rulesReport.ts",
     "facts:report": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/corpus/src/cli/factsReport.ts",
-    "archive:sqlite": "node --env-file-if-exists=.env --import tsx packages/core/src/cli/archiveSqlite.ts"
+    "archive:sqlite": "node --env-file-if-exists=.env --import tsx packages/core/src/cli/archiveSqlite.ts",
+    "ledger:demo": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/core/src/cli/changeLedger.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

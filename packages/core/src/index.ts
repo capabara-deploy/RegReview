@@ -6,6 +6,8 @@ export * from "./extract/index.js";
 export * from "./store.js";
 export * from "./sop.js";
 export * from "./sampleSops.js";
+export * from "./changeLedger.js";
+export * from "./changeStore.js";
 export * from "./facts.js";
 export * from "./runReview.js";
 export {
