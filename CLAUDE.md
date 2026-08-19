@@ -23,8 +23,8 @@ Monorepo, npm workspaces, `tsc -b` project references, ESM throughout, Node 22+.
 packages/core/     rule corpus, extraction, review engine, Claude calls, severity, CLIs,
                    and the Postgres layer (pg + the *Schema.sql files live here, not in the server)
 packages/corpus/   one-time/refreshable ingest CLIs (FDA data, CFR, authored rules) — no runtime dep
-packages/eval/     fixtures + the fixture schema; the harness itself is not built (see below)
-apps/server/       Fastify; the only process that holds an API key. Reaches Postgres through core,
+packages/eval/     fixtures + labels + the harness (loadFixtures / score / runEval)
+apps/server/       Express; the only process that holds an API key. Reaches Postgres through core,
                    and owns the MongoDB side (reviewer accounts, sessions, hourly quota)
 apps/web/          Vite + React + TS reviewer UI, served as a separate origin from the API
 ```
@@ -40,6 +40,14 @@ Two different stores, for two different reasons:
 
 **A foreign key no longer protects findings from rule deletion.** `findings.rule_id` lives in `customer` and `rules` lives in `sops`; Postgres cannot enforce a constraint across databases. The explicit "is this rule still referenced" check in `ingestSop` is now the only thing preventing an orphaned finding. Don't remove it as redundant.
 
+## Cumulative change ledger and cross-document graph
+
+Two subsystems added for the advisor roadmap (see `docs/roadmap/execution-plan.md`). Both are deliberately **deterministic** and both have a constraint that is load-bearing, not incidental:
+
+- **Change ledger** (`changeLedger.ts` / `changeStore.ts`, tables `baselines` / `changes` / `change_gaps`). It flags gaps in change assessments (wrong comparator vs the cleared 510(k) — "GP7"; missing aggregate assessment — "GP6") and lists which decision-flowchart branches a change *type* raises. **It must never render a submit / don't-submit determination** — that is the manufacturer's statutory call (21 CFR 807.81(a)(3)) and the highest-liability string this product could emit. `changes.determination` is written **only** by `setDetermination`, from a human; nothing computes it. Model inferences about a proposed change go in `change_gaps` with `origin='inferred'`, never in `findings` — a typed change has no controlled-document text to quote, so it is not protected by the hallucination guard and carries no severity.
+
+- **Cross-document graph** (`graph.ts` / `graphStore.ts`). Reference edges are extracted deterministically (a document id appearing in another document's text), classified by nearby words, and the target is stored *as written* then resolved in a second pass — so "cites a document we don't hold" is an explicit `danglingRefs` output, not a dropped edge. Computed live on read; do not materialize edges until a customer actually has thousands of documents. The shared doc-id vocabulary is `docIdMatcher()` in `extract/text.ts` — widen it there, once, if a new document-id prefix appears.
+
 Workspaces import `@regreview/core` via its **dist output**, so core builds first. `npm run build:core` before anything that depends on it (most scripts already chain this).
 
 ## Common commands (run from repo root)
@@ -53,21 +61,27 @@ npm run ingest:cfr            # CFR Part 820 (legacy QSR + QMSR)
 npm run ingest:rules          # authored ISO-clause + logic rules
 npm run corpus:report         # sanity-check the loaded corpus
 npm run review -- <file>      # review one record from the CLI (--rule ID to scope)
+npm run eval                  # eval harness, offline baseline (free); --real for the model number
+npm run ledger:demo           # seed + print the Northlake cumulative change ledger
+npm run graph:demo            # ingest the demo corpus + print the cross-document graph
 npm run dev:server            # start the API + built web UI
 npm run dev:web               # Vite dev server (proxies /api to the server)
 ```
 
 Scripts run with cwd set to the *workspace* dir, but all paths anchor to the repo root (see below), so run these from the root.
 
-**`npm run eval` is declared but does not run.** The script points at
-`packages/eval/src/cli/runEval.ts`, which does not exist on any branch — it
-crashes on invocation. What exists is `src/types.ts`, a complete and well-specced
-fixture schema (`FixtureMeta` / `ExpectedFinding`) that nothing consumes, and six
-unlabeled fixtures. Still missing: `<id>.labels.json` label files, a loader that
-resolves each `anchor` to offsets via core's `normalizeText` and hard-fails on an
-anchor or `ruleId` that no longer resolves, a scorer, and the CLI. Do not cite an
-eval number until this is built — precision is the whole asset with this
-audience, and there is currently no way to measure it.
+**`npm run eval` — the harness exists now.** Runs the engine over labeled
+fixtures (`<id>.labels.json` sidecars) and reports precision/recall. Offline by
+default (keyword baseline, free, CI-safe, no DB writes); `--real` for the model
+number (spends, and persists the fixture + its related docs because the
+consistency pass caches facts under a FK to `records`). Precision is counted
+**only** on fixtures marked `exhaustive: true` — a fixture that labels the
+planted defects but not every real finding must stay `exhaustive: false`, or the
+engine's genuine unlabeled findings count as false positives and the precision
+number lies. The first real run: recall 80% defect / 60% rule. There is not yet
+an exhaustive fixture, so there is not yet a precision gate — building one
+(and deciding how the sample-SOP conformance pass participates) is the next eval
+task.
 
 ## Things that will bite you
 
