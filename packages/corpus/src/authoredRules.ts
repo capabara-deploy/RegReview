@@ -1078,6 +1078,67 @@ const GUIDANCE_RULES: AuthoredRule[] = [
     crosswalk: ["820.30(i)"],
     harmLinked: false,
   },
+  {
+    ruleId: "guidance-safety-assurance-case",
+    citation: "FDA Infusion Pumps Total Product Life Cycle guidance (Dec 2014)",
+    title: "The risk file should present a structured argument that each system hazard's causes are controlled",
+    expectation:
+      "FDA expects more than a hazard list: it expects a safety assurance case — a structured, " +
+      "reviewable argument that, for each identified system hazard, the causes are adequately " +
+      "addressed by controls whose effectiveness is verified. Flag a risk file that enumerates " +
+      "hazards but does not connect each to a specific, verified control, and any hazard whose " +
+      "argument depends on an unstated or unsupported assumption. This is precedent from FDA's " +
+      "infusion-pump guidance but reflects how FDA reviews any higher-risk device's risk file.",
+    appliesTo: ["risk_analysis", "design_review", "validation"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-recognized-consensus-standards",
+    citation: "FDA recognized consensus standards program; cf. Infusion Pumps TPLC guidance (Dec 2014)",
+    title: "Design verification should demonstrate conformance to the recognized standards for the device type",
+    expectation:
+      "Where the device type has FDA-recognized consensus standards — for an electrical medical " +
+      "device, the IEC 60601 family, including the collateral alarm standard 60601-1-8, the EMC " +
+      "standard 60601-1-2, and the particular standard for the device type — verification should " +
+      "demonstrate conformance, or justify any deviation. Flag performance testing that asserts a " +
+      "result with no reference to the applicable recognized standard or acceptance criterion, " +
+      "and any home-use or transport-use device tested only to hospital-environment levels.",
+    appliesTo: ["verification", "validation"],
+    crosswalk: ["820.30(f)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-device-software-documentation",
+    citation: "FDA Content of Premarket Submissions for Device Software Functions (2023), superseding the 2005 level-of-concern guidance",
+    title: "Device software must be documented at the level its risk warrants",
+    expectation:
+      "Software in or controlling a device must carry documentation scaled to its risk — the " +
+      "Documentation Level (formerly Level of Concern). A higher-risk device (an infusion pump, " +
+      "for example, which FDA places at the Enhanced Documentation Level) needs the fuller set: " +
+      "architecture, detailed design, and verification traced to requirements. Flag software " +
+      "whose documentation is asserted as sufficient with no statement of its intended use or the " +
+      "risk basis, and higher-risk software documented only to a basic level.",
+    appliesTo: ["validation", "verification", "design_review"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-infusion-pump-hazards",
+    citation: "FDA Infusion Pumps Total Product Life Cycle guidance (Dec 2014), Table 2 (system hazards)",
+    title: "An infusion or fluid-delivery device's risk file must address the recognized system hazards",
+    expectation:
+      "For an infusion pump or similar fluid-delivery device, the risk file should address the " +
+      "system hazards FDA has identified for the device type, each with a control and its " +
+      "verification: infusion delivery error (wrong dose, rate, volume, time, or patient), " +
+      "occlusion and the bolus released when an occlusion clears, uncontrolled or free flow, " +
+      "reverse or retrograde flow, and air-in-line. Flag any of these recognized hazards that the " +
+      "risk file does not address, or addresses without a verified control. (Applies only where " +
+      "the device under review is a fluid-delivery device.)",
+    appliesTo: ["risk_analysis", "validation"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
 ];
 
 export const AUTHORED_RULES: AuthoredRule[] = [
