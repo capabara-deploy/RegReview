@@ -1,0 +1,105 @@
+{
+  "id": "capa-001-infusion-pump-alarm",
+  "title": "CAPA-2026-0142 — Increase in occlusion alarms, VP-400",
+  "recordType": "capa",
+  "exhaustive": true,
+  "related": [
+    "fmea-vp400-infusion",
+    "rmp-vp400-risk-plan",
+    "rmf-vp400-risk-management",
+    "comp-2026-0207-vasoactive"
+  ],
+  "notes": "Exhaustive labels for the anchor CAPA. Consistency labels (PD-01/02/03/18) only fire when the related documents are in scope; run with the real engine to exercise them.",
+  "expected": [
+    {
+      "ruleId": "regreview-logic-risk-rating-consistency",
+      "anchor": "Severity was rated **3 (Minor)**",
+      "why": "PD-01: this CAPA rates the occlusion-alarm failure mode severity 3 (Minor); FMEA-VP400 rates the same failure mode (FM-201) severity 4 (Serious).",
+      "category": "consistency",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-risk-rating-consistency",
+      "anchor": "the acceptability threshold of 20 defined in the risk management plan.",
+      "why": "PD-02: this CAPA applies an acceptability threshold of 20; the risk plan, risk file, and FMEA all use 15. The looser value lets the CAPA reach an acceptable conclusion the plan would not support.",
+      "category": "consistency",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-risk-rating-consistency",
+      "anchor": "Approximately 35,000 units are installed.",
+      "why": "PD-03: this CAPA states ~35,000 units; FMEA-VP400 states ~41,000 distributed units.",
+      "category": "consistency",
+      "severity": "low",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-risk-rating-consistency",
+      "anchor": "the cause was **operator error in seating",
+      "why": "PD-18: this CAPA determines the cause is operator seating error; the complaint COMP-2026-0207 characterizes the event as a device-side therapy interruption reaching the patient.",
+      "category": "consistency",
+      "severity": "medium",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-conclusion-supported",
+      "anchor": "Software was ruled out.",
+      "why": "PD-05: software is dismissed by assertion — the threshold logic 'was not changed and therefore was not considered further' — without evidence, and contradicted by the cleared baseline that documents the occlusion threshold later tuning changed.",
+      "category": "plausibility",
+      "severity": "medium",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "iso13485-8.5.2-no-adverse-effect",
+      "anchor": "Additionally, the cassette channel guide was modified to include a chamfer",
+      "why": "PD-06: the chamfer is applied to new production only, with no disposition of the ~35-41k distributed units and no assessment of the change against the risk file.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "iso13485-8.5.2-verification-effectiveness",
+      "anchor": "On the basis of the above, the corrective action is considered effective.",
+      "why": "PD-07: effectiveness is judged from the action being performed (chamfer present on 5 units, training delivered) rather than objective evidence of a change in the failure rate over the required window.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-capa-closure-integrity",
+      "anchor": "The insert was released with the next scheduled labeling",
+      "why": "PD-08: the CAPA is closed 2026-04-03 while the IFU corrective action is deferred to an indefinite future labeling update and the effectiveness window has not elapsed.",
+      "category": "completeness",
+      "severity": "high",
+      "difficulty": "easy"
+    },
+    {
+      "ruleId": "regreview-capa-complaint-linkage",
+      "anchor": "the site reported a transient drop in blood pressure requiring",
+      "why": "PD-09: a possible serious-injury event (vasoactive infusion interruption with a BP drop requiring intervention) with no documented MDR reportability determination or Medical Safety Officer escalation.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-evidence-locatable",
+      "anchor": "See test data for details of the bench evaluation.",
+      "why": "PD-10: evidence is referenced without a locatable record — 'test data' and '2026-02-19 project meeting minutes' carry no document number or record ID.",
+      "category": "conformance",
+      "severity": "low",
+      "difficulty": "easy"
+    }
+  ],
+  "distractors": [
+    {
+      "anchor": "infusion. No units were removed from service.",
+      "why": "A containment decision not to remove units is a legitimate, documented risk judgment — not a defect. A tool that flags it is over-reaching."
+    },
+    {
+      "anchor": "Training on the revised IFU was delivered to 100% of field service personnel by",
+      "why": "100% training completion is evidence of a completed action, correctly recorded. It is only a problem if mistaken for effectiveness verification (which PD-07 already covers separately)."
+    }
+  ]
+}

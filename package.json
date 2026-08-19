@@ -28,7 +28,7 @@
     "ingest:rules": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/corpus/src/cli/ingestAuthoredRules.ts",
     "corpus:report": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/corpus/src/cli/report.ts",
     "severity:check": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/corpus/src/cli/severityCheck.ts",
-    "eval": "npm run build:core && npm run -w @regreview/eval eval",
+    "eval": "npm run build:core && node --env-file-if-exists=.env --import tsx packages/eval/src/cli/runEval.ts",
     "dev:server": "npm run build:core && node --env-file-if-exists=.env --watch --import tsx apps/server/src/index.ts",
     "dev:web": "npm run -w @regreview/web dev",
     "user:create": "node --env-file-if-exists=.env --import tsx apps/server/src/cli/createUser.ts",
