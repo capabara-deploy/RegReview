@@ -839,10 +839,121 @@ const FDA_QSR_RULES: AuthoredRule[] = [
   },
 ];
 
+/**
+ * FDA guidance-grounded requirements.
+ *
+ * FDA guidance documents are US Government works (public domain). Each rule
+ * cites the guidance by title and encodes our own prose for the expectation —
+ * we do not paste guidance text. Guidance currency was checked: the software
+ * rule reflects that Computer Software Assurance (Sept 2025) supplements the
+ * 2002 General Principles of Software Validation and supersedes its Section 6;
+ * the human-factors rule cites the guidance as the current final version rather
+ * than pinning a superseded year. `crosswalk` ties each to the CFR paragraph it
+ * elaborates, so it still inherits real inspection-citation frequency.
+ *
+ * These encode PRECEDENT — what FDA actually looks for and cites — not new
+ * obligations: the absence of a design plan, vague design inputs, incomplete
+ * complaint intake (a specific 2025 warning-letter theme: complaints from
+ * e-commerce and international sources going uncaptured), unassured process
+ * software, unvalidated use, and unassessed changes to a cleared device.
+ */
+const GUIDANCE_RULES: AuthoredRule[] = [
+  {
+    ruleId: "guidance-design-plan",
+    citation: "FDA Design Control Guidance (1997); cf. 21 CFR 820.30(b)",
+    title: "A design and development plan must exist, define responsibilities, and be kept current",
+    expectation:
+      "The record must trace to a design and development plan that describes the design " +
+      "activities, the responsibilities for them, and how the phases interrelate, and that was " +
+      "updated as the design evolved. FDA cites the absence of a formal, maintained design plan " +
+      "as a design-control failure regardless of how sound the engineering was; a design record " +
+      "with no governing plan is the finding.",
+    appliesTo: ["design_review", "design_input"],
+    crosswalk: ["820.30(b)", "820.30(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-design-input-adequacy",
+    citation: "FDA Design Control Guidance (1997); cf. 21 CFR 820.30(c)",
+    title: "Design inputs must be unambiguous and verifiable, not aspirational",
+    expectation:
+      "Design inputs must be stated so that each can be verified or validated against an " +
+      "objective criterion. Flag inputs that are aspirational or unmeasurable ('user-friendly', " +
+      "'robust', 'as fast as possible') with no quantified acceptance basis, and inputs left open " +
+      "or 'TBD' at a phase gate that declares the design complete. An input that cannot be tested " +
+      "cannot be shown to be met.",
+    appliesTo: ["design_input", "design_review"],
+    crosswalk: ["820.30(c)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-complaint-source-completeness",
+    citation: "FDA complaint-handling enforcement precedent; cf. 21 CFR 820.198(a)",
+    title: "Complaint intake must capture every source, including online and international channels",
+    expectation:
+      "The complaint system must demonstrate it captures complaints from all channels the firm " +
+      "actually receives them through — not only direct field reports but e-commerce and online " +
+      "marketplace reviews, distributor and international reports, and service records. FDA has " +
+      "specifically cited firms for evaluating complaints from some channels while leaving " +
+      "e-commerce or international reports unreviewed. A complaint process blind to a real intake " +
+      "channel is incomplete even if it handles the channels it sees well.",
+    appliesTo: ["complaint"],
+    crosswalk: ["820.198(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-software-assurance",
+    citation: "FDA Computer Software Assurance (2025), supplementing General Principles of Software Validation (2002); cf. 21 CFR 820.70(i)",
+    title: "Software used in production or the quality system must be assured for its intended use, scaled to risk",
+    expectation:
+      "Where software automates a production or quality-system function, the record must show " +
+      "assurance appropriate to the software's intended use and the risk if it fails — with more " +
+      "rigor where a failure could affect product quality or patient safety, and correspondingly " +
+      "less for low-risk uses. A blanket claim that software is 'validated' with no statement of " +
+      "its intended use or the risk basis for the assurance performed does not meet the current " +
+      "risk-based expectation.",
+    appliesTo: ["validation", "change_package", "verification"],
+    crosswalk: ["820.70(i)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-human-factors-validation",
+    citation: "FDA Applying Human Factors and Usability Engineering to Medical Devices (current final); cf. 21 CFR 820.30(g)",
+    title: "Use-related risks must be identified and critical tasks validated with representative users",
+    expectation:
+      "Where a device is used by a person, the record must show that use-related hazards were " +
+      "analyzed, that the tasks whose failure could cause harm were identified, and that those " +
+      "critical tasks were validated with representative users under realistic use conditions. " +
+      "Use error is a foreseeable cause of harm, not operator fault; a validation that omits the " +
+      "human-factors dimension, or that dismisses a use error as user mistake without a control, " +
+      "is the finding.",
+    appliesTo: ["validation", "design_review", "risk_analysis"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-change-assessment",
+    citation: "FDA Deciding When to Submit a 510(k) for a Change to an Existing Device (2017); cf. 21 CFR 820.30(i)",
+    title: "A change to a cleared device must be assessed against the cleared device, separately and in aggregate",
+    expectation:
+      "A change to a device already cleared must be assessed for whether it could significantly " +
+      "affect safety or effectiveness, comparing against the most-recently-cleared configuration " +
+      "rather than an intervening internal revision, and considering accumulated changes together " +
+      "rather than only one at a time. The assessment and its basis must be recorded. A change " +
+      "compared to the wrong baseline, or a series of individually-minor changes never assessed " +
+      "in the aggregate, is the finding — the submit-or-not determination itself remains the " +
+      "manufacturer's to make.",
+    appliesTo: ["change_package"],
+    crosswalk: ["820.30(i)", "820.40"],
+    harmLinked: false,
+  },
+];
+
 export const AUTHORED_RULES: AuthoredRule[] = [
   ...CAPA_RULES,
   ...RISK_MANAGEMENT_RULES,
   ...FDA_QSR_RULES,
+  ...GUIDANCE_RULES,
   ...LOGIC_RULES,
 ];
 
