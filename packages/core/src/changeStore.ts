@@ -58,9 +58,12 @@ export async function createBaseline(
   args: {
     device: string;
     clearanceId: string;
-    clearedAt?: string;
-    configuration?: Record<string, string>;
-    note?: string;
+    // `| undefined` so a caller may pass the field explicitly absent (zod's
+    // .optional() yields `T | undefined`, which exactOptionalPropertyTypes
+    // otherwise rejects against a bare `?:`).
+    clearedAt?: string | undefined;
+    configuration?: Record<string, string> | undefined;
+    note?: string | undefined;
   },
   db: Db = getCustomerDb(),
 ): Promise<Baseline> {
@@ -111,12 +114,12 @@ export async function addChange(
   args: {
     baselineId: string;
     proposal: string;
-    comparator?: string;
-    changeType?: ChangeType;
-    subsystem?: string;
-    status?: Change["status"];
-    recordId?: string;
-    changedAt?: string;
+    comparator?: string | undefined;
+    changeType?: ChangeType | undefined;
+    subsystem?: string | undefined;
+    status?: Change["status"] | undefined;
+    recordId?: string | undefined;
+    changedAt?: string | undefined;
   },
   db: Db = getCustomerDb(),
 ): Promise<Change> {
