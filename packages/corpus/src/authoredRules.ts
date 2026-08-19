@@ -1141,11 +1141,610 @@ const GUIDANCE_RULES: AuthoredRule[] = [
   },
 ];
 
+/**
+ * Device-type precedent, across categories, from public FDA guidance and the
+ * device-specific special controls. These broaden the corpus beyond the CAPA /
+ * design / risk wedge to the requirements FDA applies to whole classes of
+ * device — biological safety, sterility, physical and electrical safety,
+ * software and AI, in-vitro diagnostics, clinical evidence, labeling, and a few
+ * device families.
+ *
+ * Two disciplines hold throughout. (1) Licensing: FDA guidance and 21 CFR are
+ * public domain and are the basis here; consensus standards (ISO 10993, the IEC
+ * 60601 family, ISO 11607, AAMI ST, ASTM F2503, CLSI EP) are copyrighted and are
+ * referenced BY NUMBER ONLY with our own prose for the expectation — never their
+ * text, exactly as for ISO 13485/14971 (see NOTICE.md). (2) Attribution: these
+ * apply to design, verification, validation, and risk record types — not the
+ * CAPA pass — and many self-scope in their prose to the device type they
+ * concern, so they fire a finding only on a record where they are relevant.
+ */
+const DEVICE_TYPE_RULES: AuthoredRule[] = [
+  // --- Biological safety (patient-contacting devices) ---
+  {
+    ruleId: "guidance-biocompatibility-evaluation",
+    citation: "FDA Use of ISO 10993-1 guidance (2023); ISO 10993-1 (referenced by number)",
+    title: "Patient-contacting devices need a biological evaluation scaled to contact type and duration",
+    expectation:
+      "Where the device contacts the patient's body, the record must show a biological evaluation " +
+      "planned within risk management and scaled to the nature and duration of contact (surface, " +
+      "external-communicating, or implant; limited, prolonged, or permanent). Flag a contacting " +
+      "device with no biocompatibility rationale, and a material or contact change with no " +
+      "re-evaluation. Endpoints are addressed by evidence appropriate to the contact, which may " +
+      "include prior data, literature, or testing — not testing for its own sake.",
+    appliesTo: ["risk_analysis", "verification", "validation", "design_review"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-chemical-characterization",
+    citation: "FDA biocompatibility guidance; ISO 10993-18 (referenced by number)",
+    title: "Prolonged- or permanent-contact devices should be chemically characterized for leachables",
+    expectation:
+      "For a device with prolonged or permanent body contact, the record should show the " +
+      "materials were chemically characterized and extractables/leachables assessed against a " +
+      "toxicological threshold, rather than relying on a general assertion of biocompatibility. " +
+      "Flag a long-term contacting material introduced or changed with no chemical-characterization " +
+      "or toxicological-risk rationale.",
+    appliesTo: ["risk_analysis", "verification", "validation"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  // --- Sterility and shelf life ---
+  {
+    ruleId: "guidance-sterilization-validation",
+    citation: "FDA Sterility Information in 510(k)s for Sterile Devices (2024); AAMI ST sterilization standards (by number)",
+    title: "A device labeled sterile must be sterilized by a validated method to a defined sterility assurance level",
+    expectation:
+      "Where the device is labeled sterile, the record must show the sterilization process was " +
+      "validated to a recognized method and a defined sterility assurance level, and — for " +
+      "ethylene oxide or similar — that residual limits were met. Flag a sterile claim with no " +
+      "validated process, and a sterilization or facility change applied with no revalidation.",
+    appliesTo: ["validation", "verification", "change_package"],
+    crosswalk: ["820.75(a)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-packaging-shelf-life",
+    citation: "FDA sterile-device guidance; ISO 11607 (sterile barrier packaging, by number)",
+    title: "Sterile barrier packaging and shelf life must be validated, including aging",
+    expectation:
+      "Where the device relies on a sterile barrier, the record must show the packaging system " +
+      "and its shelf life were validated — seal integrity, transport, and real-time or accelerated " +
+      "aging to the claimed expiration. Flag a shelf-life claim with no aging evidence and a " +
+      "packaging change with no revalidation.",
+    appliesTo: ["validation", "verification"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-reprocessing-reusable",
+    citation: "FDA Reprocessing Medical Devices in Health Care Settings guidance (2015)",
+    title: "A reusable device must have validated reprocessing with adequate, validated instructions",
+    expectation:
+      "Where the device is reusable, the record must show that cleaning, disinfection, and/or " +
+      "sterilization were validated for the worst-case soil and geometry, and that the reprocessing " +
+      "instructions given to the user were themselves validated as adequate and usable. Flag a " +
+      "reusable device with reprocessing instructions asserted but not validated.",
+    appliesTo: ["validation", "verification", "design_review"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  // --- Physical and electrical safety, environment ---
+  {
+    ruleId: "guidance-electrical-safety-essential-performance",
+    citation: "IEC 60601-1 basic safety and essential performance (by number); FDA recognized standards",
+    title: "An electrical medical device must demonstrate basic safety and essential performance",
+    expectation:
+      "For an electrically powered medical device, the record should show conformance to the basic " +
+      "safety and essential-performance standard for the device, including single-fault safety. " +
+      "Flag essential performance that is not defined, or a safety test asserted with no reference " +
+      "to the standard or its acceptance criteria.",
+    appliesTo: ["verification", "validation"],
+    crosswalk: ["820.30(f)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-wireless-coexistence-security",
+    citation: "FDA Radio Frequency Wireless Technology in Medical Devices guidance; AAMI TIR69 (by number)",
+    title: "Wireless functions must be tested for RF coexistence and secured",
+    expectation:
+      "Where the device uses radio-frequency wireless technology for a function that matters to " +
+      "safety or performance, the record should show the wireless link was evaluated for " +
+      "coexistence in its intended RF environment and secured against loss or corruption of the " +
+      "data it carries. Flag a safety-relevant wireless function with no coexistence or security " +
+      "evaluation.",
+    appliesTo: ["verification", "validation", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-mr-safety-labeling",
+    citation: "FDA Testing and Labeling Medical Devices for Safety in the MR Environment guidance; ASTM F2503 (by number)",
+    title: "A device used in or near MRI must be tested and labeled for the MR environment",
+    expectation:
+      "Where the device may be brought into the magnetic-resonance environment, the record must " +
+      "show it was evaluated and labeled as MR Safe, MR Conditional, or MR Unsafe per the " +
+      "recognized method, with the conditions stated for a Conditional device. Flag a device " +
+      "plausibly used near MRI with no MR determination.",
+    appliesTo: ["verification", "validation", "design_output"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-mechanical-durability",
+    citation: "FDA device-specific guidance; recognized mechanical test standards (by number)",
+    title: "A load-bearing or implanted device must demonstrate mechanical durability over its intended life",
+    expectation:
+      "For a load-bearing, implanted, or cyclically stressed device, the record should show static " +
+      "and fatigue strength demonstrated to the loads and cycle counts expected over the device's " +
+      "intended life, with acceptance criteria. Flag a durability claim asserted with no fatigue or " +
+      "life testing, or testing to a life shorter than the intended use.",
+    appliesTo: ["verification", "validation", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  // --- Software, connectivity, AI ---
+  {
+    ruleId: "guidance-interoperability",
+    citation: "FDA Design Considerations and Premarket Submission Recommendations for Interoperable Medical Devices guidance (2017)",
+    title: "An electronic interface must be designed and tested for its intended interoperability",
+    expectation:
+      "Where the device exchanges data or commands with another system, the record should show the " +
+      "electronic interface was specified — the data, the functional and performance requirements, " +
+      "the intended and reasonably foreseeable users of the interface — and verified, including its " +
+      "behavior on bad or unexpected input. Flag an interface relied on for a safety function with " +
+      "no specification or robustness testing.",
+    appliesTo: ["design_input", "verification", "validation"],
+    crosswalk: ["820.30(f)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-samd-clinical-validation",
+    citation: "FDA Software as a Medical Device (SaMD) clinical evaluation guidance (IMDRF-based)",
+    title: "Software as a medical device must be clinically validated for the claim it makes",
+    expectation:
+      "Where software is itself the medical device, the record must show a valid clinical " +
+      "association between its output and the targeted condition, and analytical and clinical " +
+      "validation appropriate to its clinical claim and risk. Flag a SaMD whose clinical claim " +
+      "outruns its validation, or whose output is presented as clinically meaningful without " +
+      "evidence it is.",
+    appliesTo: ["validation", "design_review", "risk_analysis"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-ai-good-machine-learning-practice",
+    citation: "FDA Good Machine Learning Practice guiding principles (2021); AI-Enabled Device Lifecycle guidance",
+    title: "An AI/ML device must be developed under good machine learning practice with representative data",
+    expectation:
+      "For an AI/ML-enabled device, the record should show development consistent with good machine " +
+      "learning practice: training and test data representative of the intended population and use " +
+      "conditions, training and test sets kept independent, and generalization evaluated rather " +
+      "than assumed. Flag a model evaluated only on data like its training set, or a population the " +
+      "data does not represent.",
+    appliesTo: ["validation", "design_review", "risk_analysis"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-ai-transparency",
+    citation: "FDA Transparency for Machine-Learning-Enabled Medical Devices guiding principles (2024)",
+    title: "An AI/ML device must be transparent about its model, inputs, performance, and limitations",
+    expectation:
+      "For an AI/ML-enabled device, the record should show the information a user needs to use it " +
+      "safely is disclosed: what the model does, the inputs it relies on, its performance and the " +
+      "population that performance was measured in, and its known limitations and failure modes. " +
+      "Flag performance stated with no population or subgroup context, and limitations left " +
+      "undisclosed.",
+    appliesTo: ["validation", "design_output", "design_review"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-ai-performance-monitoring",
+    citation: "FDA AI-Enabled Device Software Functions Lifecycle Management guidance (2025)",
+    title: "An AI/ML device needs a plan to monitor real-world performance and manage drift",
+    expectation:
+      "For an AI/ML-enabled device, the record should show a plan to monitor real-world " +
+      "performance after deployment and to detect and manage performance drift, with defined " +
+      "triggers for action. Flag a learning or updatable model with no monitoring plan, or changes " +
+      "made outside a predetermined change control plan.",
+    appliesTo: ["validation", "risk_analysis", "change_package"],
+    crosswalk: ["820.30(i)"],
+    harmLinked: false,
+  },
+  // --- In-vitro diagnostics ---
+  {
+    ruleId: "guidance-ivd-analytical-validation",
+    citation: "FDA IVD guidance; CLSI EP05/EP17/EP25 and related (by number)",
+    title: "An in-vitro diagnostic must establish analytical performance before clinical claims",
+    expectation:
+      "For an in-vitro diagnostic assay, the record should establish analytical performance — " +
+      "precision, limit of detection and quantitation, linearity/reportable range, interference, " +
+      "and cross-reactivity — with pre-defined acceptance criteria, before clinical performance is " +
+      "claimed. Flag a clinical claim resting on analytical validation that is incomplete or has no " +
+      "acceptance criteria.",
+    appliesTo: ["verification", "validation", "design_review"],
+    crosswalk: ["820.30(f)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-ivd-clinical-performance",
+    citation: "FDA IVD clinical performance guidance",
+    title: "An in-vitro diagnostic's clinical performance must be shown against an adequate reference in the intended population",
+    expectation:
+      "For an in-vitro diagnostic, the record should show clinical performance — sensitivity, " +
+      "specificity, or equivalent — measured against an adequate reference method or clinical " +
+      "truth, in a population representative of the intended use. Flag clinical performance claimed " +
+      "from a convenience sample, or against a reference weaker than the claim requires.",
+    appliesTo: ["validation", "risk_analysis"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-ivd-specimen-stability",
+    citation: "FDA IVD guidance; CLSI EP25 (specimen stability, by number)",
+    title: "An in-vitro diagnostic must define specimen type, handling, and stability",
+    expectation:
+      "For an in-vitro diagnostic, the record should define the acceptable specimen types, their " +
+      "collection and handling, and their stability over the claimed storage conditions and times. " +
+      "Flag a specimen stability or handling condition assumed rather than established, since it " +
+      "bounds the validity of every result the assay produces.",
+    appliesTo: ["verification", "validation"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  // --- Clinical evidence and postmarket ---
+  {
+    ruleId: "guidance-clinical-evidence-adequacy",
+    citation: "FDA clinical evidence / benefit-risk guidance",
+    title: "Clinical claims must be supported by evidence adequate to the claim and the risk",
+    expectation:
+      "Where the device makes a clinical claim that bench and nonclinical data cannot fully " +
+      "support, the record should show clinical evidence adequate to that claim and to the " +
+      "device's risk. Flag a clinical claim resting on engineering testing alone where clinical " +
+      "performance is what is being asserted, and evidence drawn from a population unlike the " +
+      "intended-use population.",
+    appliesTo: ["validation", "design_review", "risk_analysis"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-ide-significant-risk",
+    citation: "21 CFR 812 (Investigational Device Exemptions)",
+    title: "A significant-risk investigational device study must be conducted under an IDE",
+    expectation:
+      "Where the record describes a clinical investigation of a significant-risk device, it must " +
+      "show the study was conducted under an approved investigational device exemption with the " +
+      "required oversight and informed consent. Flag clinical data relied upon that appears to come " +
+      "from an investigation without the IDE and human-subject protections its risk required.",
+    appliesTo: ["validation", "design_review"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-benefit-risk-determination",
+    citation: "FDA Benefit-Risk Factors guidance",
+    title: "Residual risk must be weighed against clinical benefit in a documented determination",
+    expectation:
+      "Where residual risks remain, the record must show a documented determination that the " +
+      "device's probable benefits outweigh those risks for the intended use and population — not " +
+      "merely that each risk was reduced as far as practicable. Flag an acceptability conclusion " +
+      "that never states the benefit it is weighed against.",
+    appliesTo: ["risk_analysis", "design_review"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-postmarket-surveillance",
+    citation: "FDA postmarket surveillance guidance; 21 CFR 822 / section 522",
+    title: "Required postmarket surveillance and real-world monitoring must be planned and carried out",
+    expectation:
+      "Where postmarket surveillance is required or committed to, the record should show a plan " +
+      "with defined questions, methods, and milestones, and evidence it is being carried out. Flag " +
+      "a postmarket commitment that exists on paper with no data collection behind it.",
+    appliesTo: ["risk_analysis", "complaint"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-real-world-evidence",
+    citation: "FDA Real-World Evidence for Medical Devices guidance",
+    title: "Real-world evidence used to support a decision must be relevant and reliable",
+    expectation:
+      "Where real-world data or evidence is used to support a regulatory or safety decision, the " +
+      "record should show the data is relevant to the question and reliable in how it was collected " +
+      "and curated. Flag a decision leaning on real-world data with no assessment of its fitness " +
+      "for that use.",
+    appliesTo: ["validation", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  // --- Labeling and identification ---
+  {
+    ruleId: "cfr-801-labeling-adequacy",
+    citation: "21 CFR Part 801 (labeling)",
+    title: "Labeling must provide adequate directions for use, warnings, and contraindications",
+    expectation:
+      "The record must show the device's labeling provides adequate directions for safe use, the " +
+      "warnings and contraindications the risk analysis calls for, and the intended use and " +
+      "population. Flag a risk control that depends on a warning or instruction that the labeling " +
+      "does not actually carry, and labeling that contradicts the device's specifications.",
+    appliesTo: ["design_output", "validation"],
+    crosswalk: ["820.120"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-830-udi",
+    citation: "21 CFR Part 830 (unique device identification)",
+    title: "A unique device identifier must be assigned and carried on label and package as required",
+    expectation:
+      "Where the device is subject to unique device identification, the record must show a UDI is " +
+      "assigned, applied to the label and packages as required, and submitted to the identification " +
+      "database. Flag a device in scope of UDI with no identifier plan, since UDI is what makes a " +
+      "field action and traceability workable.",
+    appliesTo: ["design_output", "change_package"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-home-use-validation",
+    citation: "FDA Design Considerations for Devices Intended for Home Use guidance",
+    title: "A home-use device must be validated for lay users and the use environment",
+    expectation:
+      "Where the device is intended for home or non-clinical use, the record must show its use was " +
+      "validated with representative lay users under realistic home conditions, and that labeling " +
+      "and training suit a lay user. Flag a home-use device validated only with clinicians, or " +
+      "tested only to clinical-environment conditions.",
+    appliesTo: ["validation", "risk_analysis", "design_review"],
+    crosswalk: ["820.30(g)"],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-pediatric-use",
+    citation: "FDA Premarket Assessment of Pediatric Medical Devices guidance",
+    title: "A device used in pediatric patients must address pediatric-specific safety and sizing",
+    expectation:
+      "Where the intended population includes pediatric patients, the record should address " +
+      "pediatric-specific considerations — size and anatomy, growth, dosing or delivery scaling, " +
+      "and use environment. Flag a pediatric indication supported only by adult data with no " +
+      "pediatric-specific rationale.",
+    appliesTo: ["design_input", "risk_analysis", "validation"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  // --- Additional QSR requirements with a record home ---
+  {
+    ruleId: "cfr-820.30d-design-output",
+    citation: "21 CFR 820.30(d) (design output)",
+    title: "Design outputs must be defined with acceptance criteria and identify what is essential to safe function",
+    expectation:
+      "Design outputs must be documented, expressed in terms that can be verified against the " +
+      "inputs, and contain or reference the acceptance criteria; outputs essential to the proper " +
+      "functioning of the device must be identified. Flag outputs with no acceptance criteria and " +
+      "essential characteristics not called out. (Under QMSR this enters via ISO 13485 7.3.4.)",
+    appliesTo: ["design_output", "design_review"],
+    crosswalk: ["820.30(d)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.30a-design-controls-scope",
+    citation: "21 CFR 820.30(a) (design controls, general)",
+    title: "Design controls must actually be applied to the device under development",
+    expectation:
+      "The record must show the device's design was developed under design controls — a plan, " +
+      "inputs, outputs, review, verification, validation, transfer, and change control — not as an " +
+      "engineering effort documented after the fact. Flag a design record that reads as " +
+      "reconstructed to satisfy an audit rather than as evidence controls were followed as the " +
+      "work happened.",
+    appliesTo: ["design_review", "design_input"],
+    crosswalk: ["820.30(a)"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.65-traceability",
+    citation: "21 CFR 820.65 (traceability)",
+    title: "Critical components and units must be traceable to enable corrective action and recall",
+    expectation:
+      "For a device or component whose failure could cause significant injury, the record must " +
+      "show traceability by lot, batch, or unit sufficient to identify and retrieve affected " +
+      "product if a problem emerges. Flag a safety-critical component with no traceability that " +
+      "would let a field action find every affected unit.",
+    appliesTo: ["traceability_matrix", "change_package", "design_output"],
+    crosswalk: ["820.65"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.170-installation",
+    citation: "21 CFR 820.170 (installation)",
+    title: "A device requiring installation must be installed and checked per instructions",
+    expectation:
+      "Where the device must be installed to work safely, the record must show installation and " +
+      "inspection were performed against adequate instructions, and that installation results were " +
+      "recorded. Flag a device whose safe function depends on installation with no installation " +
+      "procedure or verification.",
+    appliesTo: ["verification", "change_package"],
+    crosswalk: ["820.170"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-820.200-servicing",
+    citation: "21 CFR 820.200 (servicing)",
+    title: "Servicing must be performed to instructions and analyzed as a quality signal",
+    expectation:
+      "Where the device is serviced, the record must show servicing was carried out under " +
+      "instructions and that service reports were analyzed for whether an event is also a complaint " +
+      "or a signal of a systemic problem. Flag service data treated as purely operational with no " +
+      "feedback into complaint handling or CAPA.",
+    appliesTo: ["capa", "complaint", "change_package"],
+    crosswalk: ["820.200"],
+    harmLinked: false,
+  },
+  // --- Device families (self-scoping to the device type) ---
+  {
+    ruleId: "guidance-cardiovascular-implant",
+    citation: "FDA cardiovascular device guidance; recognized cardiovascular test standards (by number)",
+    title: "A cardiovascular implant must demonstrate durability, corrosion resistance, and hemocompatibility",
+    expectation:
+      "For an implanted cardiovascular device (stent, valve, lead, graft), the record should show " +
+      "fatigue and durability to the physiological loading over the intended life, corrosion " +
+      "resistance, hemocompatibility, and MR conditionality. Flag any of these device-type " +
+      "expectations left unaddressed for a permanent blood-contacting implant.",
+    appliesTo: ["risk_analysis", "verification", "validation"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-orthopedic-implant",
+    citation: "FDA orthopedic device guidance; recognized orthopedic test standards (by number)",
+    title: "An orthopedic implant must demonstrate static and fatigue strength and wear performance",
+    expectation:
+      "For a load-bearing orthopedic implant, the record should show static and fatigue strength " +
+      "for the intended loading and life, wear performance for articulating surfaces, and an " +
+      "assessment of wear-debris and particulate. Flag a load-bearing implant whose mechanical or " +
+      "wear performance is asserted without test evidence.",
+    appliesTo: ["risk_analysis", "verification", "validation"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-energy-device-thermal-safety",
+    citation: "FDA electrosurgical / energy device guidance",
+    title: "An energy-delivering device must bound unintended thermal or tissue effects",
+    expectation:
+      "For a device that delivers energy to tissue (electrosurgical, laser, RF, ultrasonic), the " +
+      "record should show the unintended thermal spread, tissue effect, and stray-energy paths were " +
+      "characterized and bounded, with safeguards verified. Flag an energy device whose collateral " +
+      "effects are not characterized.",
+    appliesTo: ["risk_analysis", "verification"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-drug-delivery-dose-accuracy",
+    citation: "FDA drug-delivery / combination-product guidance",
+    title: "A drug-delivery device must validate delivered-dose accuracy across its use range",
+    expectation:
+      "For a device that delivers a drug or measured dose, the record should show delivered-dose " +
+      "accuracy validated across the intended range, flow rates, and conditions, including startup " +
+      "and low-rate behavior where clinically relevant. Flag a dose-accuracy claim with no data at " +
+      "the extremes where under- or over-delivery is most likely.",
+    appliesTo: ["validation", "verification", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-combination-product",
+    citation: "21 CFR Part 4 (combination products); FDA combination-product guidance",
+    title: "A combination product must satisfy the requirements of each of its constituent parts",
+    expectation:
+      "For a device that includes a drug or biologic constituent, the record should show the " +
+      "requirements applicable to each constituent part are met and their interaction assessed — " +
+      "the device's design controls and the drug's quality attributes, and any effect of one on " +
+      "the other. Flag a combination product documented as if it were a device only.",
+    appliesTo: ["design_review", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-radiation-imaging-safety",
+    citation: "FDA radiation-emitting device guidance; 21 CFR 1020 where applicable",
+    title: "A radiation-emitting or imaging device must manage dose and image quality to intended use",
+    expectation:
+      "For a device that emits ionizing radiation or produces diagnostic images, the record should " +
+      "show radiation dose is managed to be as low as reasonably achievable for the required image " +
+      "quality, with dose and quality characterized and controlled. Flag a claim of adequate " +
+      "imaging with no dose characterization, or dose reduced below what the diagnostic task needs.",
+    appliesTo: ["risk_analysis", "verification", "validation"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-fluid-path-integrity",
+    citation: "FDA device-specific guidance; recognized fluid-path test standards (by number)",
+    title: "A catheter or fluid-path device must demonstrate mechanical and leak integrity",
+    expectation:
+      "For a catheter, tubing set, or fluid-path device, the record should show tensile and bond " +
+      "strength, kink and collapse resistance, leak and burst integrity, and connector security to " +
+      "the recognized standards. Flag a fluid-path or connector whose integrity is asserted without " +
+      "the mechanical test evidence.",
+    appliesTo: ["verification", "validation", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-battery-power-safety",
+    citation: "FDA battery-powered device guidance; recognized battery safety standards (by number)",
+    title: "A battery-powered device must manage battery safety and power-loss behavior",
+    expectation:
+      "For a battery-powered device, the record should show battery safety (thermal, overcharge, " +
+      "and mechanical), the device's behavior on depletion and power loss, and adequate low-battery " +
+      "warning. Flag a device whose safe operation depends on battery power with no analysis of its " +
+      "depletion and power-loss behavior.",
+    appliesTo: ["risk_analysis", "verification"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "guidance-particulate-matter",
+    citation: "FDA device-specific guidance; recognized particulate test methods (by number)",
+    title: "A device that could shed particulate into the patient must bound it",
+    expectation:
+      "Where a device or its delivery path could shed particulate matter into the patient — a " +
+      "coated device, a fluid path, an articulating surface — the record should characterize and " +
+      "bound the particulate to an accepted limit. Flag a plausible particulate source with no " +
+      "characterization.",
+    appliesTo: ["verification", "risk_analysis"],
+    crosswalk: [],
+    harmLinked: false,
+  },
+  {
+    ruleId: "guidance-alarm-system-design",
+    citation: "IEC 60601-1-8 (alarm systems, by number); FDA alarm guidance",
+    title: "A device with alarms must define alarm conditions, priorities, and defaults, and consider alarm fatigue",
+    expectation:
+      "For a device that alarms, the record should show the alarm conditions, their priorities, " +
+      "the default settings, and the annunciation are defined per the recognized alarm standard, " +
+      "and that the design considered failure to annunciate and alarm fatigue. Flag a safety alarm " +
+      "with no defined priority or default, or a design that adds alarms without weighing the " +
+      "fatigue they create.",
+    appliesTo: ["risk_analysis", "verification", "design_review"],
+    crosswalk: [],
+    harmLinked: true,
+  },
+  {
+    ruleId: "cfr-820.160-distribution",
+    citation: "21 CFR 820.160 (control and distribution)",
+    title: "Distribution must be controlled so only released product ships and it can be traced",
+    expectation:
+      "The record must show finished product was distributed only after release, in a controlled " +
+      "order where product age or expiration matters, and that distribution records let a shipped " +
+      "unit be traced. Flag product distributed before final release, or distribution records that " +
+      "would not support locating shipped units in a field action.",
+    appliesTo: ["change_package", "verification"],
+    crosswalk: ["820.160"],
+    harmLinked: false,
+  },
+  {
+    ruleId: "cfr-801.15-labeling-symbols",
+    citation: "21 CFR 801.15 (symbols in labeling); ISO 15223-1 (by number)",
+    title: "Symbols used in labeling must be recognized or explained in a glossary",
+    expectation:
+      "Where labeling uses symbols in place of text, the record must show each symbol is from a " +
+      "recognized standard used within its scope, or is explained in an accompanying glossary. " +
+      "Flag a safety-relevant instruction or warning conveyed only by an unexplained symbol.",
+    appliesTo: ["design_output"],
+    crosswalk: ["820.120"],
+    harmLinked: false,
+  },
+];
+
 export const AUTHORED_RULES: AuthoredRule[] = [
   ...CAPA_RULES,
   ...RISK_MANAGEMENT_RULES,
   ...FDA_QSR_RULES,
   ...GUIDANCE_RULES,
+  ...DEVICE_TYPE_RULES,
   ...LOGIC_RULES,
 ];
 

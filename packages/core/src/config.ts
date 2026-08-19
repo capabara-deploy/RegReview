@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
  * frequency table. Findings from different corpus versions are not comparable,
  * and `runs.corpus_version` is what lets us tell.
  */
-export const CORPUS_VERSION = "2026.08.3";
+export const CORPUS_VERSION = "2026.08.4";
 
 /**
  * The prompt version stamped onto every run. Bump on any change to a check
