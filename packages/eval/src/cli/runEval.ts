@@ -7,8 +7,8 @@ import {
   getCorpusDb,
   loadRulesFor,
   runAgreement,
+  saveRecord,
   type Finding,
-  type RecordDoc,
   type ReviewEngine,
 } from "@regreview/core";
 import { readdirSync } from "node:fs";
@@ -63,7 +63,7 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
-/** One engine pass over a fixture, without persisting a run or its findings. */
+/** One engine pass over a fixture, without persisting a RUN or its findings. */
 async function reviewOnce(
   engine: ReviewEngine,
   fixture: LoadedFixture,
@@ -161,6 +161,16 @@ async function main(): Promise<void> {
 
     if (!rulesByType.has(fixture.record.recordType)) {
       rulesByType.set(fixture.record.recordType, await loadRulesFor(fixture.record.recordType));
+    }
+
+    // The real engine's consistency pass caches extracted facts, which carry a
+    // foreign key to `records`. So the fixture and its related documents must be
+    // persisted before a real review — the same contract runReview documents for
+    // its callers. The offline baseline runs no facts pass and stays write-free,
+    // which keeps `npm run eval` (offline) safe to run in CI with no DB writes.
+    if (args.real) {
+      await saveRecord(fixture.record, fixture.blocks);
+      for (const rel of fixture.relatedDocs) await saveRecord(rel.record, rel.blocks);
     }
 
     // First pass scores; extra passes (real only) measure agreement.

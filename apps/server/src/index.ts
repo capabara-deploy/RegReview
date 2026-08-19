@@ -35,6 +35,7 @@ import {
   getSopsDb,
   getSop,
   implicatedBranches,
+  loadGraph,
   ingestSop,
   listBaselines,
   listChanges,
@@ -517,6 +518,14 @@ app.patch("/api/changes/:changeId/determination", async (req, res) => {
   const updated = await setDetermination(req.params.changeId, parsed.data.determination);
   if (!updated) return res.status(404).json({ error: "change not found" });
   res.json(updated);
+});
+
+// ---------------------------------------------------------------------------
+// Cross-document graph (Phase 3). Read-only. Deterministic reference edges plus
+// per-document finding severity, for the reference map. Computed on read.
+// ---------------------------------------------------------------------------
+app.get("/api/graph", async (_req, res) => {
+  res.json(await loadGraph());
 });
 
 /** The audit trail for one finding. */

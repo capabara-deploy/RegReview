@@ -10,11 +10,12 @@ import {
 } from "./api";
 import { ChangeLedger } from "./ChangeLedger";
 import { Findings } from "./Findings";
+import { GraphMap } from "./GraphMap";
 import { Login } from "./Login";
 import { Procedures } from "./Procedures";
 import { RunReview } from "./RunReview";
 
-type Page = "run" | "findings" | "procedures" | "changes";
+type Page = "run" | "findings" | "procedures" | "changes" | "map";
 
 /**
  * The shell: navigation, the record/run the findings view is showing, and the
@@ -312,6 +313,12 @@ export function App() {
           >
             Changes
           </button>
+          <button
+            className={`viewtab ${page === "map" ? "on" : ""}`}
+            onClick={() => setPage("map")}
+          >
+            Map
+          </button>
         </nav>
 
         <button className="signout-btn" onClick={() => void signOut()}>
@@ -346,6 +353,8 @@ export function App() {
       {page === "procedures" && <Procedures onChanged={refreshRecords} />}
 
       {page === "changes" && <ChangeLedger onAuthError={() => setUsername(null)} />}
+
+      {page === "map" && <GraphMap onAuthError={() => setUsername(null)} />}
     </div>
   );
 }

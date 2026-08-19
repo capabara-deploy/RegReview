@@ -72,6 +72,42 @@ export interface CumulativeAssessment {
   changes: Change[];
 }
 
+// --- Cross-document graph ---
+export type EdgeKind =
+  | "references"
+  | "governed_by"
+  | "supersedes"
+  | "modifies"
+  | "verifies"
+  | "implements"
+  | "escalates_to";
+
+export interface GraphNode {
+  recordId: string;
+  docId: string | null;
+  filename: string;
+  recordType: string;
+  worstSeverity: "high" | "medium" | "low" | null;
+  findingCount: number;
+}
+
+export interface GraphEdge {
+  edgeId: string;
+  srcRecordId: string;
+  dstRef: string;
+  dstRecordId: string | null;
+  kind: EdgeKind;
+  quote: string;
+  charStart: number;
+  charEnd: number;
+}
+
+export interface Graph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  danglingRefs: { srcRecordId: string; dstRef: string }[];
+}
+
 export interface SeverityBasis {
   citationFrequency: number;
   frequencyPercentile: number;
@@ -372,4 +408,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ determination }),
     }),
+
+  // Cross-document reference map.
+  graph: () => json<Graph>("/api/graph"),
 };

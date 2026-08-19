@@ -2,14 +2,14 @@
   "id": "capa-001-infusion-pump-alarm",
   "title": "CAPA-2026-0142 — Increase in occlusion alarms, VP-400",
   "recordType": "capa",
-  "exhaustive": true,
+  "exhaustive": false,
   "related": [
     "fmea-vp400-infusion",
     "rmp-vp400-risk-plan",
     "rmf-vp400-risk-management",
     "comp-2026-0207-vasoactive"
   ],
-  "notes": "Exhaustive labels for the anchor CAPA. Consistency labels (PD-01/02/03/18) only fire when the related documents are in scope; run with the real engine to exercise them.",
+  "notes": "NOT exhaustive, and deliberately so. The real engine finds additional genuine defects this file does not label — in particular conformance findings against the seeded SAMPLE-CAPA-001 procedure, and finer-grained consistency findings (occurrence/index as well as severity). Marking this exhaustive would count those real findings as false positives and produce a misleading precision number. Precision is therefore not computed on this fixture; recall against the 10 planted defects is the signal here. A truly exhaustive fixture (for a real precision gate) is follow-on labeling work — and requires deciding how the sample-SOP conformance pass participates in eval. First real run (claude-opus-4-8/p2, with the four related docs): recall 80% defect / 60% rule, hard-case recall 88%.",
   "expected": [
     {
       "ruleId": "regreview-logic-risk-rating-consistency",

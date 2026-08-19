@@ -1631,3 +1631,16 @@ body {
 .add-change-actions { display: flex; gap: 0.5rem; }
 .add-change-btn { margin-top: 1rem; }
 button.secondary { background: transparent; }
+
+/* --- Cross-document map --- */
+.graphmap { display: flex; flex-direction: column; height: calc(100vh - 60px); }
+.graphmap-bar { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border, #e2e4e8); }
+.graphmap-scroll { flex: 1; overflow: auto; padding: 0.5rem; }
+.graphmap-svg { display: block; }
+.gm-label { font-size: 11px; font-weight: 600; fill: #1a2332; }
+.gm-sub { font-size: 9px; fill: #6b7280; }
+.graphmap-panel { position: fixed; right: 0; top: 60px; bottom: 0; width: 300px; background: var(--bg, #fff);
+  border-left: 1px solid var(--border, #e2e4e8); padding: 1rem; overflow: auto; box-shadow: -2px 0 8px rgba(0,0,0,0.05); }
+.gm-edges { list-style: none; padding: 0; margin: 0.75rem 0 0; font-size: 0.85rem; }
+.gm-edges li { padding: 0.35rem 0; border-bottom: 1px solid var(--border, #eef); }
+.gm-kind { font-weight: 600; color: #2b6cb0; }
