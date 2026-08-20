@@ -2438,6 +2438,7 @@ body {
 .gap-row {
   display: flex;
   gap: 9px;
+  align-items: start;
   padding: 8px 11px;
   background: #fff6e5;
   border-left: 3px solid #e0a020;
@@ -2454,10 +2455,31 @@ body {
   border-left-color: #cc2b2b;
 }
 
+/* A fixed label column, so the detail text on every gap row starts at the same
+   x. Sized to the widest label the ledger emits ("Undocumented and aging",
+   153px) plus room to spare. It was `flex: none` + nowrap, which let each row's
+   own label width set its own text indent — six gap kinds produced six
+   different left edges reading down the list.
+
+   `white-space: normal` matters: a future label longer than this column wraps
+   inside it rather than pushing the column wider and breaking the alignment
+   again for that one row. */
 .gap-kind {
+  flex: 0 0 160px;
   font-weight: 700;
-  white-space: nowrap;
-  flex: none;
+}
+
+/* Below this the fixed column eats too much of the line to leave a readable
+   measure for the detail, so the label becomes a heading over it. */
+@media (max-width: 760px) {
+  .gap-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .gap-kind {
+    flex: none;
+  }
 }
 
 .change-comparator {
@@ -2466,7 +2488,14 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Same fixed-label-column treatment as .gap-row, and for the same reason: the
+   step codes vary in width ("main/A" vs "software/Q3b"), so inline flow started
+   each question at a different x and dropped wrapped lines back to the row
+   padding with no hanging indent. A column keeps the questions in one edge. */
 .branch-row {
+  display: flex;
+  gap: 9px;
+  align-items: start;
   font-size: 12.5px;
   line-height: 1.5;
   padding: 5px 0 5px 11px;
@@ -2475,10 +2504,24 @@ body {
 }
 
 .branch-row code {
+  flex: 0 0 84px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 11px;
+  /* The mono face sits small against 12.5px body text; nudge it onto the same
+     first baseline rather than letting it ride high in the line box. */
+  line-height: 1.7;
   color: var(--muted);
-  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .branch-row {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .branch-row code {
+    flex: none;
+  }
 }
 
 .ledger-disclaimer {

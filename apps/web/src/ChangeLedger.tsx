@@ -797,8 +797,8 @@ function ChangeDetail({
             <div key={i} className="branch-row">
               <code>
                 {b.chart}/{b.step}
-              </code>{" "}
-              {b.consider}
+              </code>
+              <span>{b.consider}</span>
             </div>
           ))}
         </div>
