@@ -12,9 +12,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run typecheck:web",
     "clean": "tsc -b --clean",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && npm run typecheck:web",
+    "//typecheck:web": "apps/web is deliberately not a root project reference (it is not composite; Vite owns its build), so its types are checked by this separate pass. It is chained into build/typecheck because an unreferenced, never-invoked check is the same as no check — two type errors sat undetected in RunReview.tsx until someone ran it by hand. `vite build` will NOT catch these: esbuild strips types without checking them.",
+    "typecheck:web": "tsc -p apps/web --noEmit",
     "//": "Workspaces import @regreview/core via its dist output, so core is built first. tsc -b is incremental, so this is a no-op once warm.",
     "build:core": "tsc -b packages/core",
     "//review": "Run from the repo root so --env-file-if-exists finds ./.env and the CLI's relative imports resolve. --env-file-if-exists (not --env-file) so a missing .env is not an error.",

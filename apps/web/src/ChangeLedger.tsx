@@ -176,6 +176,13 @@ export function ChangeLedger({ onAuthError }: { onAuthError: () => void }) {
 
   const active = assessment?.changes.find((c) => c.changeId === openChange) ?? null;
 
+  // An API process running code older than this tab returns an assessment with
+  // no `pools`/`escalation`, and every risk surface below would throw on it —
+  // turning a stale dev server into a blank tab with a console stack trace. The
+  // tsx dev server does not hot-reload server code, so this is the single most
+  // likely way this screen breaks. Say so, instead of dying.
+  const staleApi = assessment !== null && assessment.pools === undefined;
+
   return (
     <div className="ledger">
       {error && <div className="error">{error}</div>}
@@ -191,7 +198,15 @@ export function ChangeLedger({ onAuthError }: { onAuthError: () => void }) {
         </select>
       </div>
 
-      {assessment && (
+      {staleApi && (
+        <div className="error">
+          This API is running an older build: it returned a change assessment with no
+          risk totals. Restart the API server — the tsx dev server does not reload
+          server code on edit (<code>npm run dev:server</code>).
+        </div>
+      )}
+
+      {assessment && !staleApi && (
         <>
           <RiskGauge assessment={assessment} onThresholdSaved={reload} onError={fail} />
 

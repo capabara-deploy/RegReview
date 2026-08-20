@@ -326,10 +326,26 @@ export interface UploadResult {
   recordId: string;
   filename: string;
   recordType: string;
+  /** Parsed out of the document text, so null when no id could be matched. */
+  docId: string | null;
+  revision: string | null;
   format: string;
   pageCount: number | null;
   blocks: number;
   warning: string | null;
+}
+
+/**
+ * The replace endpoint's response: an upload, plus what replacing cost.
+ *
+ * Replacing a document re-blocks it, and findings anchored to character offsets
+ * in the old text cannot survive that — so they are discarded. The count is
+ * reported rather than swallowed because a reviewer who has just lost twelve
+ * findings needs to be told, and it is the one thing this response carries that
+ * a first-time upload cannot.
+ */
+export interface ReplaceResult extends UploadResult {
+  discardedFindings: number;
 }
 
 /** One document's slot in a job. Always present; length 1 for a single review. */
@@ -421,7 +437,7 @@ export const api = {
   },
 
   /** Replace a document's file in place, keeping its record identity. */
-  replaceRecord: async (recordId: string, file: File): Promise<UploadResult> => {
+  replaceRecord: async (recordId: string, file: File): Promise<ReplaceResult> => {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch(`${API_URL}/api/records/${recordId}/replace`, {
@@ -434,7 +450,7 @@ export const api = {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       throw new Error(body.error ?? `${res.status} ${res.statusText}`);
     }
-    return (await res.json()) as UploadResult;
+    return (await res.json()) as ReplaceResult;
   },
 
   startReview: (
