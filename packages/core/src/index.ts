@@ -8,6 +8,7 @@ export * from "./sop.js";
 export * from "./sampleSops.js";
 export * from "./changeLedger.js";
 export * from "./changeStore.js";
+export * from "./changeScorer.js";
 export * from "./graph.js";
 export * from "./graphStore.js";
 export * from "./facts.js";

@@ -19,17 +19,25 @@ import {
 import { consumeQuota, ensureQuotaIndexes, initQuota, peekQuota, resetQuota } from "./quota.js";
 import {
   addChange,
+  advanceStage,
+  attachChanges,
   categoriesForRules,
   ChangeType,
+  clearSubmission,
   config,
   createBaseline,
+  createSubmission,
   cumulativeAssessment,
   deleteSop,
   Determination,
   detectFormat,
+  effectiveScore,
   extractRecord,
+  fileSubmission,
   FindingStatus,
+  formatRationale,
   getBaseline,
+  getChange,
   getCorpusDb,
   getCustomerDb,
   getSopsDb,
@@ -40,6 +48,7 @@ import {
   listBaselines,
   listChanges,
   listSops,
+  listSubmissions,
   loadFindings,
   loadRulesFor,
   migrateCorpus,
@@ -48,8 +57,16 @@ import {
   RecordType,
   runReview,
   saveRecord,
+  saveSuggestedScore,
+  scoreChange,
   setDetermination,
   setFindingStatus,
+  setScore,
+  setSubmissionStatus,
+  setThreshold,
+  Stage,
+  SubmissionKind,
+  SubmissionStatus,
   updateSop,
   type Block,
   type Db,
@@ -470,6 +487,8 @@ const BaselineBody = z.object({
   clearedAt: z.string().optional(),
   configuration: z.record(z.string()).optional(),
   note: z.string().optional(),
+  threshold: z.number().int().min(1).max(1000).optional(),
+  thresholdSource: z.string().optional(),
 });
 
 app.post("/api/baselines", async (req, res) => {
@@ -478,17 +497,43 @@ app.post("/api/baselines", async (req, res) => {
   res.status(201).json(await createBaseline(parsed.data));
 });
 
+// The escalation threshold belongs to the customer's change-control procedure,
+// so it is editable, and the citation is editable with it — an escalation
+// message that cannot name the procedure it comes from is just an opinion.
+const ThresholdBody = z.object({
+  threshold: z.number().int().min(1).max(1000),
+  thresholdSource: z.string().nullable().optional(),
+});
+
+app.patch("/api/baselines/:baselineId/threshold", async (req, res) => {
+  const parsed = ThresholdBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const updated = await setThreshold(
+    req.params.baselineId,
+    parsed.data.threshold,
+    parsed.data.thresholdSource ?? null,
+  );
+  if (!updated) return res.status(404).json({ error: "baseline not found" });
+  res.json(updated);
+});
+
 /** A baseline's changes and the deterministic cumulative assessment over them. */
 app.get("/api/baselines/:baselineId/assessment", async (req, res) => {
   const baseline = await getBaseline(req.params.baselineId);
   if (!baseline) return res.status(404).json({ error: "baseline not found" });
   const changes = await listChanges(baseline.baselineId);
-  const assessment = cumulativeAssessment(baseline, changes);
+  const submissions = await listSubmissions(baseline.baselineId);
+  const assessment = cumulativeAssessment(baseline, changes, submissions);
   // Attach, per change, the flowchart branches its type implicates — questions
-  // to consider, never answers.
+  // to consider, never answers — and the resolved score with its provenance, so
+  // the UI can show WHERE each number came from rather than just the total.
   res.json({
     ...assessment,
-    changes: changes.map((c) => ({ ...c, branches: implicatedBranches(c.changeType) })),
+    changes: changes.map((c) => ({
+      ...c,
+      branches: implicatedBranches(c.changeType),
+      effective: effectiveScore(c),
+    })),
   });
 });
 
@@ -497,6 +542,7 @@ const ChangeBody = z.object({
   comparator: z.string().optional(),
   changeType: ChangeType.optional(),
   subsystem: z.string().optional(),
+  stage: Stage.optional(),
   changedAt: z.string().optional(),
 });
 
@@ -518,6 +564,170 @@ app.patch("/api/changes/:changeId/determination", async (req, res) => {
   const updated = await setDetermination(req.params.changeId, parsed.data.determination);
   if (!updated) return res.status(404).json({ error: "change not found" });
   res.json(updated);
+});
+
+// --- Workflow ---------------------------------------------------------------
+
+const StageBody = z.object({
+  stage: Stage,
+  /** Required to reach `documented`: the controlled document capturing it. */
+  recordId: z.string().optional(),
+});
+
+/**
+ * Advance a change through the workflow.
+ *
+ * The reviewer who marks a change documented is usually not the engineer who
+ * logged it, so the acting username is stamped from the session rather than
+ * taken from the body — an unverifiable "documented by" is worse than none.
+ */
+app.patch("/api/changes/:changeId/stage", async (req, res) => {
+  const parsed = StageBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  try {
+    const updated = await advanceStage(req.params.changeId, parsed.data.stage, {
+      recordId: parsed.data.recordId,
+      actor: req.username,
+    });
+    res.json(updated);
+  } catch (err) {
+    // Backwards transitions and a documented-without-a-document both land here;
+    // both are the caller's error, not a server fault.
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// --- Scoring ----------------------------------------------------------------
+
+/**
+ * Ask the model to suggest a risk score for a change.
+ *
+ * Writes `suggested_score` only. It cannot write `score`, cannot write a
+ * determination, and its output is clamped up to the change type's floor when
+ * totals are computed — see changeScorer.ts for why those three guards stand in
+ * for the hallucination guard that free-typed text cannot have.
+ */
+app.post("/api/changes/:changeId/suggest-score", async (req, res) => {
+  const change = await getChange(req.params.changeId);
+  if (!change) return res.status(404).json({ error: "change not found" });
+  const baseline = await getBaseline(change.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+
+  try {
+    const suggestion = await scoreChange(change, {
+      device: baseline.device,
+      clearanceId: baseline.clearanceId,
+    });
+    const updated = await saveSuggestedScore(
+      change.changeId,
+      suggestion.score,
+      formatRationale(suggestion),
+    );
+    res.json({ change: updated, suggestion });
+  } catch (err) {
+    res.status(502).json({ error: `scoring failed: ${(err as Error).message}` });
+  }
+});
+
+// The only writer of the human-confirmed score. `belowFloorRationale` is the
+// documented rationale the FDA change guidance asks for when a presumptively
+// significant change is judged otherwise; without it the floor holds, which is
+// enforced in effectiveScore rather than here.
+const ScoreBody = z.object({
+  score: z.number().int().min(1).max(10),
+  belowFloorRationale: z.string().optional(),
+});
+
+app.patch("/api/changes/:changeId/score", async (req, res) => {
+  const parsed = ScoreBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const updated = await setScore(req.params.changeId, parsed.data.score, {
+    actor: req.username,
+    belowFloorRationale: parsed.data.belowFloorRationale,
+  });
+  if (!updated) return res.status(404).json({ error: "change not found" });
+  res.json({ ...updated, effective: effectiveScore(updated) });
+});
+
+// --- Submissions ------------------------------------------------------------
+//
+// Tracking only. No route decides that a submission is needed, picks its kind,
+// or files it; every one of these records something a person already did.
+
+const SubmissionBody = z.object({
+  title: z.string().min(1),
+  kind: SubmissionKind.optional(),
+  note: z.string().optional(),
+  changeIds: z.array(z.string()).optional(),
+});
+
+app.get("/api/baselines/:baselineId/submissions", async (req, res) => {
+  res.json(await listSubmissions(req.params.baselineId));
+});
+
+app.post("/api/baselines/:baselineId/submissions", async (req, res) => {
+  const baseline = await getBaseline(req.params.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+  const parsed = SubmissionBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  try {
+    res.status(201).json(await createSubmission({ baselineId: baseline.baselineId, ...parsed.data }));
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+app.post("/api/submissions/:submissionId/changes", async (req, res) => {
+  const parsed = z.object({ changeIds: z.array(z.string()).min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  try {
+    const attached = await attachChanges(req.params.submissionId, parsed.data.changeIds);
+    res.json({ attached });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+const SubmissionStatusBody = z.object({
+  status: SubmissionStatus,
+  filedAt: z.string().optional(),
+  /** Required for `cleared`: the number on the FDA letter. */
+  clearanceId: z.string().optional(),
+  decisionAt: z.string().optional(),
+});
+
+/**
+ * Move a submission's status.
+ *
+ * `cleared` is the interesting one: it establishes a successor baseline and
+ * retires the changes the submission carried, which is what resets accumulated
+ * risk. It needs the clearance number from the FDA letter, entered by a person —
+ * the tool never predicts or assumes one.
+ */
+app.patch("/api/submissions/:submissionId/status", async (req, res) => {
+  const parsed = SubmissionStatusBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const { status, filedAt, clearanceId, decisionAt } = parsed.data;
+  try {
+    if (status === "cleared") {
+      if (!clearanceId) {
+        return res
+          .status(400)
+          .json({ error: "clearanceId is required to record a clearance" });
+      }
+      return res.json(
+        await clearSubmission(req.params.submissionId, { clearanceId, decisionAt }),
+      );
+    }
+    const updated =
+      status === "filed"
+        ? await fileSubmission(req.params.submissionId, filedAt ?? new Date().toISOString())
+        : await setSubmissionStatus(req.params.submissionId, status);
+    if (!updated) return res.status(404).json({ error: "submission not found" });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
 });
 
 // ---------------------------------------------------------------------------

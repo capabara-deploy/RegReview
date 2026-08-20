@@ -15,6 +15,37 @@ export type ChangeType =
   | "other";
 export type Determination = "undecided" | "letter_to_file" | "new_submission";
 
+export type Stage =
+  | "proposed"
+  | "implemented"
+  | "documented"
+  | "in_submission"
+  | "cleared"
+  | "superseded";
+
+export type SubmissionKind =
+  | "special_510k"
+  | "traditional_510k"
+  | "abbreviated_510k"
+  | "letter_to_file"
+  | "pma_supplement"
+  | "other";
+
+export type SubmissionStatus = "planned" | "filed" | "additional_info" | "cleared" | "withdrawn";
+
+export interface Submission {
+  submissionId: string;
+  baselineId: string;
+  title: string;
+  kind: SubmissionKind;
+  status: SubmissionStatus;
+  filedAt: string | null;
+  decisionAt: string | null;
+  clearanceId: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
 export interface Baseline {
   baselineId: string;
   device: string;
@@ -22,6 +53,10 @@ export interface Baseline {
   clearedAt: string | null;
   configuration: Record<string, string>;
   note: string | null;
+  /** The customer's own escalation threshold, from their change-control SOP. */
+  threshold: number;
+  thresholdSource: string | null;
+  supersededBy: string | null;
   createdAt: string;
 }
 
@@ -29,6 +64,24 @@ export interface ImplicatedBranch {
   chart: "main" | "software";
   step: string;
   consider: string;
+}
+
+export type ScoreSource = "confirmed" | "confirmed_below_floor" | "suggested" | "floor";
+
+/**
+ * The score that actually counts, and where it came from.
+ *
+ * `source` is the part the UI must never drop: a number a reviewer confirmed
+ * and a number a model guessed look identical once they are summed, and the
+ * whole credibility of the total rests on being able to tell them apart.
+ */
+export interface EffectiveScore {
+  value: number;
+  source: ScoreSource;
+  floor: number;
+  floorReason: string;
+  clampedByFloor: boolean;
+  belowFloorRationale: string | null;
 }
 
 export interface Change {
@@ -39,12 +92,25 @@ export interface Change {
   changeType: ChangeType;
   subsystem: string | null;
   determination: Determination;
-  status: "proposed" | "implemented" | "superseded";
+  stage: Stage;
   recordId: string | null;
   changedAt: string | null;
   createdAt: string;
+  score: number | null;
+  suggestedScore: number | null;
+  suggestedRationale: string | null;
+  suggestedAt: string | null;
+  scoredBy: string | null;
+  scoredAt: string | null;
+  belowFloorRationale: string | null;
+  implementedAt: string | null;
+  documentedAt: string | null;
+  documentedBy: string | null;
+  submissionId: string | null;
   /** Attached by the assessment endpoint: branches to consider for this type. */
   branches?: ImplicatedBranch[];
+  /** Attached by the assessment endpoint: the resolved score and its provenance. */
+  effective?: EffectiveScore;
 }
 
 export interface ChangeGap {
@@ -62,6 +128,32 @@ export interface SubsystemCluster {
   count: number;
 }
 
+export interface RiskPools {
+  undocumented: number;
+  unsubmitted: number;
+  exposure: number;
+  pipeline: number;
+  projected: number;
+  inSubmission: number;
+  unconfirmed: number;
+}
+
+/**
+ * The escalation signal. Note what it is not: a statement that a submission is
+ * required. It reports the customer's own procedural threshold and whether
+ * accumulated risk has passed it — the determination stays with the human.
+ */
+export interface Escalation {
+  crossed: boolean;
+  exposure: number;
+  threshold: number;
+  thresholdSource: string | null;
+  headroom: number;
+  projectedCrosses: boolean;
+  undecided: number;
+  message: string;
+}
+
 export interface CumulativeAssessment {
   baseline: Baseline;
   totalChanges: number;
@@ -69,6 +161,10 @@ export interface CumulativeAssessment {
   typesPresent: ChangeType[];
   gaps: ChangeGap[];
   undecided: number;
+  pools: RiskPools;
+  escalation: Escalation;
+  stageCounts: Record<Stage, number>;
+  submissions: Submission[];
   changes: Change[];
 }
 
@@ -409,12 +505,26 @@ export const api = {
     clearanceId: string;
     clearedAt?: string;
     note?: string;
+    threshold?: number;
+    thresholdSource?: string;
   }) => json<Baseline>("/api/baselines", { method: "POST", body: JSON.stringify(body) }),
   assessment: (baselineId: string) =>
     json<CumulativeAssessment>(`/api/baselines/${baselineId}/assessment`),
+  setThreshold: (baselineId: string, threshold: number, thresholdSource: string | null) =>
+    json<Baseline>(`/api/baselines/${baselineId}/threshold`, {
+      method: "PATCH",
+      body: JSON.stringify({ threshold, thresholdSource }),
+    }),
   addChange: (
     baselineId: string,
-    body: { proposal: string; comparator?: string; changeType?: ChangeType; subsystem?: string; changedAt?: string },
+    body: {
+      proposal: string;
+      comparator?: string;
+      changeType?: ChangeType;
+      subsystem?: string;
+      stage?: Stage;
+      changedAt?: string;
+    },
   ) =>
     json<Change>(`/api/baselines/${baselineId}/changes`, {
       method: "POST",
@@ -425,6 +535,58 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ determination }),
     }),
+
+  /** Advance a change through the workflow. `documented` requires a recordId. */
+  advanceStage: (changeId: string, stage: Stage, recordId?: string) =>
+    json<Change>(`/api/changes/${changeId}/stage`, {
+      method: "PATCH",
+      body: JSON.stringify(recordId ? { stage, recordId } : { stage }),
+    }),
+
+  /** Ask the model for a score. Writes only the suggestion, never the score. */
+  suggestScore: (changeId: string) =>
+    json<{ change: Change; suggestion: { score: number; rationale: string; unknowns: string[] } }>(
+      `/api/changes/${changeId}/suggest-score`,
+      { method: "POST" },
+    ),
+
+  /** The human's score. `belowFloorRationale` is required to go under the floor. */
+  setScore: (changeId: string, score: number, belowFloorRationale?: string) =>
+    json<Change & { effective: EffectiveScore }>(`/api/changes/${changeId}/score`, {
+      method: "PATCH",
+      body: JSON.stringify(
+        belowFloorRationale ? { score, belowFloorRationale } : { score },
+      ),
+    }),
+
+  submissions: (baselineId: string) =>
+    json<Submission[]>(`/api/baselines/${baselineId}/submissions`),
+  createSubmission: (
+    baselineId: string,
+    body: { title: string; kind?: SubmissionKind; note?: string; changeIds?: string[] },
+  ) =>
+    json<Submission>(`/api/baselines/${baselineId}/submissions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  attachChanges: (submissionId: string, changeIds: string[]) =>
+    json<{ attached: number }>(`/api/submissions/${submissionId}/changes`, {
+      method: "POST",
+      body: JSON.stringify({ changeIds }),
+    }),
+  setSubmissionStatus: (
+    submissionId: string,
+    body: {
+      status: SubmissionStatus;
+      filedAt?: string;
+      clearanceId?: string;
+      decisionAt?: string;
+    },
+  ) =>
+    json<Submission | { submission: Submission; baseline: Baseline; retired: number }>(
+      `/api/submissions/${submissionId}/status`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
 
   // Cross-document reference map.
   graph: () => json<Graph>("/api/graph"),

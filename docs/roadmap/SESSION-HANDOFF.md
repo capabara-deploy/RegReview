@@ -189,6 +189,20 @@ Then open **http://localhost:5174** and sign in. **Local demo login:**
 - **Phase 2 — cumulative change ledger.** `changeLedger.ts`/`changeStore.ts`, server
   routes, a **Changes** UI tab. Flags GP7 wrong-comparator + GP6 aggregate gaps and
   lists decision-flowchart questions; never issues a verdict. `npm run ledger:demo`.
+- **Changes tab rebuilt into a workflow (2026-08-20).** The tab was a flat list; it is
+  now the thing it was meant to replace — the risk spreadsheet every device company
+  keeps — done honestly. Five-stage workflow (`proposed → implemented → documented →
+  in_submission → cleared`), risk pooled into **undocumented** vs **unsubmitted**
+  exposure, a deterministic **floor** under every 1–10 score (from the change type's
+  FDA flowchart branch) that only a written rationale can go below, model scoring via
+  `changeScorer.ts` (suggestions only — never `score`, always clamped), **submissions**
+  as first-class rows, and `clearSubmission()` which re-baselines the device so
+  accumulation correctly restarts. UI is a threshold **gauge** + a **stage board** with
+  a detail panel. Escalation is phrased as a conformance finding against the customer's
+  *own* change-control threshold (`baselines.threshold` / `threshold_source`), never as
+  FDA advice — see CLAUDE.md for why that line matters. New gap kinds: `unscored_change`,
+  `unconfirmed_score`, `below_floor_no_rationale`, `undocumented_aging`.
+  `npm run ledger:demo -- --reseed` rebuilds the VP-400 demo rows to exercise all of it.
 - **Phase 3 — cross-document graph + map.** Deterministic reference edges,
   `GET /api/graph`, a dependency-free SVG **Map** tab. `npm run graph:demo`.
 - **Corpus 29 → 110 rules.** 35 CFR, 46 guidance, 26 ISO-clause, 3 logic — grounded
@@ -213,6 +227,7 @@ npm run corpus:report         # sanity: CAPA still top-3?
 npm run severity:check        # tier distribution; warns on alarm-fatigue
 npm run sop -- <file> --applies-to <type>   # load a procedure as conformance rules
 npm run ledger:demo           # seed + print the Northlake change ledger
+npm run ledger:demo -- --reseed   # rebuild the VP-400 demo rows (deletes + reseeds them)
 npm run graph:demo            # ingest the demo corpus + print the reference graph
 npm run dev:server / dev:web  # run the app locally (see §6 for the DNS preload)
 ```
