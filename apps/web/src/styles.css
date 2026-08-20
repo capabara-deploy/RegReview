@@ -489,10 +489,18 @@ body {
   margin: 8px 0 0;
 }
 
+/* The document list reads as a table of rows, not a stack of boxes.
+ *
+ * It used to be grey bordered rows on the white `.rp-section` card — the house
+ * idiom inverted (`.sop-item` is a white item on a grey sidebar), which made a
+ * six-document list look like six competing panels. Rows now sit directly on
+ * the card, separated by hairlines, and carry a left accent bar when selected —
+ * the same selection cue `.sop-item` uses, so the two lists in the app read the
+ * same way.
+ */
 .doclist {
   display: flex;
   flex-direction: column;
-  gap: 3px;
 }
 
 /* Wraps rather than crushes. The type dropdown and run count are fixed-width
@@ -506,15 +514,26 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 8px 6px 10px;
+  /* The transparent left border is the resting state of the selection bar, so
+     selecting a row cannot shift its contents sideways. */
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 7px 8px 7px 9px;
+  background: transparent;
+}
+
+.docrow:last-child {
+  border-bottom: none;
+}
+
+.docrow:hover {
   background: var(--bg);
 }
 
 .docrow.on {
-  background: #eef2f7;
-  border-color: var(--accent);
+  background: var(--low-bg);
+  border-left-color: var(--accent);
 }
 
 .docrow-main {
@@ -539,24 +558,46 @@ body {
   min-width: 0;
 }
 
+/* Quiet until touched.
+ *
+ * Every row carries one of these, and as an outlined pill that was six heavy
+ * shapes competing with the six filenames that actually matter. It reads as a
+ * label at rest and reveals its control affordance on hover or focus — still
+ * one click to change, but it stops shouting. */
+/* The cell holds the column; the select inside it is only as wide as its own
+   label. Stretching the select to the full column left its native caret
+   stranded ~60px from the text it belongs to. Fixed here rather than
+   max-width, because a document whose type is not in RECORD_TYPES gets an
+   extra prepended option that would otherwise widen this one row's column. */
+.docrow-typecell {
+  flex: 0 0 136px;
+  display: flex;
+  min-width: 0;
+}
+
 .docrow-type {
   font: inherit;
   font-size: 11px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 2px 6px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 2px 4px;
   white-space: nowrap;
   cursor: pointer;
-  /* Fixed rather than max-width: a document whose type is not in RECORD_TYPES
-     gets an extra prepended option, which would otherwise widen that one row's
-     dropdown and shift its column out of line with the rest. */
-  flex: 0 0 132px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.docrow-type:hover {
-  border-color: var(--accent);
+.docrow-type:hover,
+.docrow-type:focus {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.docrow:hover .docrow-type {
+  color: var(--text);
 }
 
 /* Flat type label for cross-check rows, where the type is context, not editable. */
@@ -877,10 +918,15 @@ body {
 
 /* Checkboxes carry a browser-default margin (~3px), so every `gap` in this
    view was really gap + that margin, and the amount differed per engine. Zero
-   it and let the flex gap be the whole truth. */
+   it and let the flex gap be the whole truth.
+
+   `accent-color` matters more than it looks: the default checked fill is the
+   platform accent — magenta on this machine — so a list of selected documents
+   rendered in a colour that appears nowhere else in the product. */
 .runpage input[type="checkbox"] {
   flex: none;
   margin: 0;
+  accent-color: var(--accent);
 }
 
 .rc-rule {
@@ -2728,34 +2774,59 @@ button.secondary {
 
 /* --- Documents grouped by type --- */
 
-.doctype-group {
-  border-top: 1px solid var(--border);
+.doctype-group + .doctype-group {
+  margin-top: 10px;
 }
 
-.doctype-group:first-child {
-  border-top: none;
-}
-
+/* A quiet section rule above each type, so the groups read as headings over
+   their rows rather than as more boxes in the stack. */
 .doctype-head {
   display: flex;
   align-items: center;
+  border-bottom: 1px solid var(--border);
 }
 
-/* Shared shape for the two icon actions on a document row. They sat at
-   different paddings, radii and hover treatments despite being the same
-   control in the same place. */
+/* Shared shape for the two icon actions on a document row.
+ *
+ * These were text glyphs — a bare "⟳" and "×" — which render at whatever weight
+ * and baseline the system font happens to give them, and looked like stray
+ * characters rather than controls. They are now matched 14px stroked SVGs on a
+ * square hit target, so they share a weight with each other and stay crisp. */
 .docrow-replace,
 .docrow-del {
-  font: inherit;
-  font-size: 15px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   color: var(--muted);
   background: none;
   border: none;
-  border-radius: 4px;
-  padding: 3px 7px;
+  border-radius: 5px;
   cursor: pointer;
   flex: none;
+}
+
+.docrow-replace svg,
+.docrow-del svg {
+  display: block;
+}
+
+/* The actions are quiet until the row is under the cursor — they are
+   destructive-adjacent and should not compete with the filenames — but they
+   stay reachable by keyboard at all times. */
+.docrow-replace,
+.docrow-del {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+.docrow:hover .docrow-replace,
+.docrow:hover .docrow-del,
+.docrow-replace:focus-visible,
+.docrow-del:focus-visible {
+  opacity: 1;
 }
 
 .docrow-replace:hover:not(:disabled) {

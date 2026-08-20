@@ -28,6 +28,11 @@ const RECORD_TYPES: { value: string; label: string }[] = [
   { value: "unknown", label: "Other" },
 ];
 
+/** Sentence-case a lowercase engine value (a check phase or pass name). */
+function sentence(v: string): string {
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
 /**
  * Display label for a record type.
  *
@@ -36,13 +41,50 @@ const RECORD_TYPES: { value: string; label: string }[] = [
  * "Risk analysis / RMF" — the same type under two names on one screen. The
  * fallback stays for a type stored before it was in RECORD_TYPES.
  */
-/** Sentence-case a lowercase engine value (a check phase or pass name). */
-function sentence(v: string): string {
-  return v.charAt(0).toUpperCase() + v.slice(1);
-}
-
 function recordTypeLabel(value: string): string {
   return RECORD_TYPES.find((t) => t.value === value)?.label ?? value.replace(/_/g, " ");
+}
+
+/**
+ * The two row actions, as matched icons.
+ *
+ * They were the text glyphs "⟳" and "×", which take whatever weight and
+ * baseline the system font gives them — next to each other they looked like
+ * stray characters at two different sizes rather than a pair of controls.
+ * Drawn instead at a shared 1.6 stroke on the same 16-unit grid, in
+ * currentColor so the hover states in CSS still drive them.
+ */
+const iconProps = {
+  width: 14,
+  height: 14,
+  viewBox: "0 0 16 16",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.6,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
+
+/** Upload-into-tray: the action is "put a new file in this document's place". */
+function ReplaceIcon() {
+  return (
+    <svg {...iconProps} aria-hidden="true">
+      <path d="M8 10V2.7" />
+      <path d="M5 5.6 8 2.6l3 3" />
+      <path d="M2.8 10.6v1.9c0 .6.4 1 1 1h8.4c.6 0 1-.4 1-1v-1.9" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg {...iconProps} aria-hidden="true">
+      <path d="M2.8 4.3h10.4" />
+      <path d="M6.4 4.3V3.1c0-.3.2-.5.5-.5h2.2c.3 0 .5.2.5.5v1.2" />
+      <path d="M4.2 4.3l.5 8.1c0 .5.4.9.9.9h4.8c.5 0 .9-.4.9-.9l.5-8.1" />
+      <path d="M6.7 6.7v4.2M9.3 6.7v4.2" />
+    </svg>
+  );
 }
 
 const SOURCE_GROUPS: { key: string; label: string; sources: string[] }[] = [
@@ -636,6 +678,11 @@ export function RunReview({
                         {/* Editable, not a badge: the type decides which rules
                             apply, and a document uploaded under the wrong one is
                             reviewed against the wrong requirements — or none. */}
+                        {/* Fixed-width cell, auto-width select: the column
+                            stays aligned down the list while the native caret
+                            still sits beside its label instead of stranded at
+                            the far edge of a stretched control. */}
+                        <span className="docrow-typecell">
                         <select
                           className="docrow-type"
                           value={r.recordType}
@@ -653,6 +700,7 @@ export function RunReview({
                             </option>
                           ))}
                         </select>
+                        </span>
                         <span className="docrow-runs">
                           {r.runs === 0 ? "Never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
                         </span>
@@ -665,14 +713,14 @@ export function RunReview({
                             replaceInput.current?.click();
                           }}
                         >
-                          ⟳
+                          <ReplaceIcon />
                         </button>
                         <button
                           className="docrow-del"
                           title="Delete this document and all its findings"
                           onClick={() => void onDelete(r)}
                         >
-                          ×
+                          <TrashIcon />
                         </button>
                       </div>
                     );
