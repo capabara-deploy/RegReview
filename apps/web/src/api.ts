@@ -176,32 +176,91 @@ export type EdgeKind =
   | "modifies"
   | "verifies"
   | "implements"
-  | "escalates_to";
+  | "escalates_to"
+  | "captured_by"
+  | "submitted_in";
+
+/** How an edge is drawn — seven kinds collapse to three the eye can hold. */
+export type DrawKind = "derives" | "governs" | "broken";
+
+export type Lane = "cleared" | "trigger" | "proposition" | "change_doc" | "submission";
+
+export const LANE_ORDER: Lane[] = [
+  "cleared",
+  "trigger",
+  "proposition",
+  "change_doc",
+  "submission",
+];
+
+export const LANE_LABEL: Record<Lane, string> = {
+  cleared: "Cleared record",
+  trigger: "Triggers",
+  proposition: "Propositions",
+  change_doc: "Change documents",
+  submission: "Submissions",
+};
+
+/**
+ * `proposed` is a document a change owes and has not produced. It is not a
+ * document: no id, no findings, no severity. Never render it as one.
+ */
+export type NodeKind = "document" | "change" | "proposed" | "submission";
+
+export interface NodeRisk {
+  changeId: string;
+  score: number;
+  scoreSource: ScoreSource;
+  stage: Stage;
+  gapCount: number;
+  gapKinds: string[];
+  daysUndocumented: number | null;
+}
 
 export interface GraphNode {
-  recordId: string;
+  nodeId: string;
+  kind: NodeKind;
+  lane: Lane;
+  recordId: string | null;
+  changeId: string | null;
   docId: string | null;
-  filename: string;
-  recordType: string;
+  label: string;
+  sublabel: string;
   worstSeverity: "high" | "medium" | "low" | null;
   findingCount: number;
+  risk: NodeRisk | null;
 }
 
 export interface GraphEdge {
   edgeId: string;
-  srcRecordId: string;
+  srcNodeId: string;
   dstRef: string;
-  dstRecordId: string | null;
+  dstNodeId: string | null;
   kind: EdgeKind;
+  drawKind: DrawKind;
   quote: string;
   charStart: number;
   charEnd: number;
 }
 
+/** Accumulated risk for the map header — the change ledger's totals. */
+export interface GraphRisk {
+  device: string;
+  clearanceId: string;
+  exposure: number;
+  threshold: number;
+  thresholdSource: string | null;
+  crossed: boolean;
+  undocumented: number;
+  unsubmitted: number;
+  owedDocuments: number;
+}
+
 export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
-  danglingRefs: { srcRecordId: string; dstRef: string }[];
+  danglingRefs: { srcNodeId: string; dstRef: string }[];
+  risk: GraphRisk | null;
 }
 
 export interface SeverityBasis {

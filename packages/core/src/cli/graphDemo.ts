@@ -5,6 +5,7 @@ import { extractRecord } from "../extract/index.js";
 import { migrateCustomer } from "../db/migrate.js";
 import { saveRecord } from "../store.js";
 import { loadGraph } from "../graphStore.js";
+import { LANE_LABEL, LANE_ORDER } from "../graph.js";
 import type { RecordType } from "../types.js";
 
 /**
@@ -68,17 +69,43 @@ async function main(): Promise<void> {
     console.log(`  ${String(n).padStart(3)}  ${kind}`);
   }
 
-  const idByRecord = new Map(graph.nodes.map((n) => [n.recordId, n.docId ?? n.filename]));
+  const labelByNode = new Map(graph.nodes.map((n) => [n.nodeId, n.label]));
+  const label = (nodeId: string) => labelByNode.get(nodeId) ?? "?";
+
+  console.log("\nNodes by lane:");
+  for (const lane of LANE_ORDER) {
+    const inLane = graph.nodes.filter((n) => n.lane === lane);
+    if (inLane.length === 0) continue;
+    console.log(`  ${LANE_LABEL[lane]} (${inLane.length})`);
+    for (const n of inLane) {
+      const owed = n.kind === "proposed" ? "  [owed]" : "";
+      const risk = n.risk ? `  risk ${n.risk.score}${n.risk.gapCount ? ` · ${n.risk.gapCount} gap(s)` : ""}` : "";
+      console.log(`      ${n.label.padEnd(46)}${risk}${owed}`);
+    }
+  }
+
   console.log("\nResolved edges:");
-  for (const e of graph.edges.filter((x) => x.dstRecordId)) {
-    console.log(`  ${(idByRecord.get(e.srcRecordId) ?? "?").padEnd(16)} --${e.kind}--> ${e.dstRef}`);
+  for (const e of graph.edges.filter((x) => x.dstNodeId)) {
+    console.log(
+      `  ${label(e.srcNodeId).slice(0, 30).padEnd(30)} --${e.drawKind}/${e.kind}--> ${label(e.dstNodeId!).slice(0, 30)}`,
+    );
   }
 
   if (graph.danglingRefs.length > 0) {
-    console.log(`\nDangling references (cited but not held): ${graph.danglingRefs.length}`);
+    console.log(`\nBroken references (cited but not held): ${graph.danglingRefs.length}`);
     for (const d of graph.danglingRefs.slice(0, 12)) {
-      console.log(`  ${(idByRecord.get(d.srcRecordId) ?? "?").padEnd(16)} -> ${d.dstRef}`);
+      console.log(`  ${label(d.srcNodeId).slice(0, 30).padEnd(30)} -> ${d.dstRef}`);
     }
+  }
+
+  if (graph.risk) {
+    const r = graph.risk;
+    console.log(
+      `\nAccumulated risk on the map: ${r.exposure} of ${r.threshold}` +
+        `${r.crossed ? "  (past your procedure's escalation point)" : ""}\n` +
+        `  ${r.undocumented} undocumented · ${r.unsubmitted} documented-not-filed · ` +
+        `${r.owedDocuments} document(s) owed and not written`,
+    );
   }
 }
 

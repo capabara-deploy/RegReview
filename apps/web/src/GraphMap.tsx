@@ -1,49 +1,81 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, AuthError, type Graph, type GraphEdge, type GraphNode } from "./api";
+import {
+  api,
+  AuthError,
+  LANE_LABEL,
+  LANE_ORDER,
+  type Graph,
+  type GraphEdge,
+  type GraphNode,
+  type Lane,
+} from "./api";
 
 /**
- * The cross-document reference map (Ben's spider map).
+ * The document map.
  *
- * A deliberately dependency-free SVG. The value is not the picture but what it
- * makes legible: which documents reference which, laid out by document class so
- * the design-history flow reads left-to-right, and each document coloured by the
- * severity of its latest review so problems are visible at a glance. Selecting a
- * node isolates its edges — the honest way to read a dense graph.
+ * Not an inventory of what a company has — a picture of what its record should
+ * contain, which is what an investigator compares them against. So it draws
+ * three things that are not documents:
  *
- * Deterministic layout, computed here: columns by record type, nodes stacked
- * within a column. No force simulation, so the same corpus always draws the same
- * map — the same property the rest of the pipeline is built on.
+ *  - every active CHANGE, in the propositions lane;
+ *  - for each change with no controlled document, the document it OWES, drawn
+ *    dashed and labelled as not written;
+ *  - the accumulated risk riding on each of them.
+ *
+ * Three deliberate constraints:
+ *
+ * **Lanes, not a blob.** Every node has a lane from its role and the flow runs
+ * top to bottom through them. Edges mostly connect adjacent lanes, which is
+ * what makes this read as a pathway rather than a web.
+ *
+ * **Deterministic layout.** Lane by role, order within lane by label. No force
+ * simulation, so the same corpus always draws the same map. A picture that
+ * rearranges itself on every load cannot go into an audit response, and it
+ * would quietly contradict the repeat-run consistency the rest of the pipeline
+ * is built on.
+ *
+ * **Three line kinds, not seven.** `drawKind` collapses the edge vocabulary for
+ * drawing; the specific verb stays on the edge and is shown in the panel, where
+ * there is room to read it.
  */
 
-const COLUMN_ORDER = [
-  "design_input",
-  "design_output",
-  "design_review",
-  "verification",
-  "validation",
-  "traceability_matrix",
-  "risk_analysis",
-  "complaint",
-  "capa",
-  "change_package",
-  "unknown",
-];
-
-const COL_W = 190;
-const NODE_W = 150;
-const NODE_H = 40;
-const ROW_H = 58;
-const PAD_Y = 40;
+const NODE_W = 168;
+const NODE_H = 46;
+const COL_GAP = 18;
+const LANE_GAP = 46;
+/** Wide enough for the longest lane name ("Change documents", ~135px). */
+const LANE_LABEL_W = 152;
+const PAD = 24;
 
 const SEV_FILL: Record<string, string> = {
-  high: "#f8d7da",
-  medium: "#fff3cd",
-  low: "#e7f1dd",
+  high: "#fdeaea",
+  medium: "#fdf4e0",
+  low: "#eaf1e6",
 };
 const SEV_STROKE: Record<string, string> = {
   high: "#c0392b",
-  medium: "#d18b12",
+  medium: "#b8860b",
   low: "#5a8a3c",
+};
+
+/** Kind decides the shape; severity only ever tints a real document. */
+const KIND_FILL: Record<string, string> = {
+  document: "#f4f5f7",
+  change: "#e8eef7",
+  proposed: "#fbfbfa",
+  submission: "#e6f0ea",
+};
+const KIND_STROKE: Record<string, string> = {
+  document: "#c4cad4",
+  change: "#4a6fa5",
+  proposed: "#c0392b",
+  submission: "#2e7d5b",
+};
+
+const EDGE_STROKE: Record<string, string> = {
+  derives: "#8895aa",
+  governs: "#a8adb8",
+  broken: "#c0392b",
 };
 
 interface Positioned extends GraphNode {
@@ -69,32 +101,45 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
 
   const layout = useMemo(() => {
     if (!graph) return null;
-    const columns = new Map<string, GraphNode[]>();
+    const byLane = new Map<Lane, GraphNode[]>();
     for (const n of graph.nodes) {
-      const key = COLUMN_ORDER.includes(n.recordType) ? n.recordType : "unknown";
-      if (!columns.has(key)) columns.set(key, []);
-      columns.get(key)!.push(n);
+      if (!byLane.has(n.lane)) byLane.set(n.lane, []);
+      byLane.get(n.lane)!.push(n);
     }
+
     const positioned = new Map<string, Positioned>();
-    let colIndex = 0;
-    let maxRows = 0;
-    for (const type of COLUMN_ORDER) {
-      const col = columns.get(type);
-      if (!col || col.length === 0) continue;
-      col.sort((a, b) => (a.docId ?? a.filename).localeCompare(b.docId ?? b.filename));
-      col.forEach((n, row) => {
-        positioned.set(n.recordId, {
+    const lanes: { lane: Lane; y: number; h: number; count: number }[] = [];
+    // Widest lane decides the canvas; every lane wraps at that column count so
+    // the picture stays rectangular instead of one lane running off the side.
+    const widest = Math.max(1, ...[...byLane.values()].map((v) => v.length));
+    const perRow = Math.min(widest, 6);
+    let y = PAD;
+
+    for (const lane of LANE_ORDER) {
+      const items = byLane.get(lane);
+      if (!items || items.length === 0) continue;
+      items.sort((a, b) => a.label.localeCompare(b.label));
+      const rows = Math.ceil(items.length / perRow);
+      items.forEach((n, i) => {
+        const col = i % perRow;
+        const row = Math.floor(i / perRow);
+        positioned.set(n.nodeId, {
           ...n,
-          x: colIndex * COL_W + 30,
-          y: PAD_Y + row * ROW_H,
+          x: PAD + LANE_LABEL_W + col * (NODE_W + COL_GAP),
+          y: y + row * (NODE_H + 12),
         });
       });
-      maxRows = Math.max(maxRows, col.length);
-      colIndex++;
+      const h = rows * (NODE_H + 12) - 12;
+      lanes.push({ lane, y, h, count: items.length });
+      y += h + LANE_GAP;
     }
-    const width = colIndex * COL_W + 60;
-    const height = PAD_Y * 2 + maxRows * ROW_H;
-    return { positioned, width, height, columns: colIndex };
+
+    return {
+      positioned,
+      lanes,
+      width: PAD * 2 + LANE_LABEL_W + perRow * (NODE_W + COL_GAP),
+      height: y - LANE_GAP + PAD,
+    };
   }, [graph]);
 
   if (error) return <div className="error">{error}</div>;
@@ -103,8 +148,9 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
     return (
       <div className="empty-state">
         <p className="muted">
-          No documents yet. Upload documents from the <strong>Run a review</strong> tab; the
-          map draws the references between them.
+          Nothing to map yet. Upload documents from <strong>Run a review</strong>, or record a
+          change in <strong>Changes</strong> — the map draws both, and the documents your
+          changes still owe.
         </p>
       </div>
     );
@@ -113,32 +159,38 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
   const connected = new Set<string>();
   if (selected) {
     for (const e of graph.edges) {
-      if (e.srcRecordId === selected) e.dstRecordId && connected.add(e.dstRecordId);
-      if (e.dstRecordId === selected) connected.add(e.srcRecordId);
+      if (e.srcNodeId === selected && e.dstNodeId) connected.add(e.dstNodeId);
+      if (e.dstNodeId === selected) connected.add(e.srcNodeId);
     }
   }
 
-  const isDim = (recordId: string): boolean =>
-    selected !== null && recordId !== selected && !connected.has(recordId);
-
+  const isDim = (nodeId: string): boolean =>
+    selected !== null && nodeId !== selected && !connected.has(nodeId);
   const edgeVisible = (e: GraphEdge): boolean =>
-    !selected || e.srcRecordId === selected || e.dstRecordId === selected;
+    !selected || e.srcNodeId === selected || e.dstNodeId === selected;
 
   const center = (n: Positioned) => ({ x: n.x + NODE_W / 2, y: n.y + NODE_H / 2 });
-
   const selectedNode = selected ? layout.positioned.get(selected) : null;
   const selectedEdges = selected
-    ? graph.edges.filter((e) => e.srcRecordId === selected || e.dstRecordId === selected)
+    ? graph.edges.filter((e) => e.srcNodeId === selected || e.dstNodeId === selected)
     : [];
-  const idFor = (recordId: string | null) =>
-    recordId ? layout.positioned.get(recordId)?.docId ?? layout.positioned.get(recordId)?.filename ?? "?" : "?";
+  const labelFor = (nodeId: string | null) =>
+    nodeId ? (layout.positioned.get(nodeId)?.label ?? "?") : "?";
+
+  const risk = graph.risk;
 
   return (
     <div className="graphmap">
       <div className="graphmap-bar">
         <span className="muted">
-          {graph.nodes.length} documents · {graph.edges.length} references
-          {graph.danglingRefs.length > 0 && ` · ${graph.danglingRefs.length} cite a document not in scope`}
+          {graph.nodes.filter((n) => n.kind === "document").length} documents ·{" "}
+          {graph.edges.filter((e) => e.dstNodeId).length} references
+          {graph.danglingRefs.length > 0 && (
+            <> · <strong className="gm-broken">{graph.danglingRefs.length} broken</strong></>
+          )}
+          {risk && risk.owedDocuments > 0 && (
+            <> · <strong className="gm-broken">{risk.owedDocuments} document(s) owed</strong></>
+          )}
         </span>
         {selected && (
           <button className="secondary" onClick={() => setSelected(null)}>
@@ -147,61 +199,132 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
         )}
       </div>
 
+      {/* Accumulated risk, from the change ledger, on the map it belongs to.
+          Reports the customer's own threshold — never a submission verdict. */}
+      {risk && (
+        <div className={`gm-risk ${risk.crossed ? "crossed" : ""}`}>
+          <span className="gm-risk-num">{risk.exposure}</span>
+          <span className="muted">
+            of {risk.threshold} accumulated risk since {risk.clearanceId}
+            {risk.thresholdSource ? ` (${risk.thresholdSource})` : ""} ·{" "}
+            {risk.undocumented} undocumented · {risk.unsubmitted} documented, not filed
+          </span>
+        </div>
+      )}
+
       <div className="graphmap-scroll">
         <svg width={layout.width} height={layout.height} className="graphmap-svg">
           <defs>
-            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#aab" />
+            <marker id="gm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
             </marker>
           </defs>
 
+          {layout.lanes.map((l) => (
+            <g key={l.lane}>
+              <rect
+                x={PAD}
+                y={l.y - 8}
+                width={layout.width - PAD * 2}
+                height={l.h + 16}
+                rx={8}
+                fill={l.lane === "proposition" ? "#f7f9fc" : "#fafaf8"}
+                stroke="#eceae4"
+              />
+              <text x={PAD + 12} y={l.y + 16} className="gm-lane">
+                {LANE_LABEL[l.lane]}
+              </text>
+              <text x={PAD + 12} y={l.y + 32} className="gm-sub">
+                {l.count}
+              </text>
+            </g>
+          ))}
+
           {graph.edges.map((e) => {
-            if (!e.dstRecordId) return null;
-            const a = layout.positioned.get(e.srcRecordId);
-            const b = layout.positioned.get(e.dstRecordId);
+            const a = layout.positioned.get(e.srcNodeId);
+            const b = e.dstNodeId ? layout.positioned.get(e.dstNodeId) : null;
             if (!a || !b) return null;
             const p1 = center(a);
             const p2 = center(b);
-            const mx = (p1.x + p2.x) / 2;
+            const stroke = EDGE_STROKE[e.drawKind] ?? "#8895aa";
+            // Two nodes on the same row share a y, so a centre-to-centre curve
+            // degenerates to a straight horizontal line that runs through every
+            // node between them. Bow those under the row instead. Most edges in
+            // the cleared lane are same-row (documents citing procedures), so
+            // without this the busiest lane is also the least readable one.
+            const sameRow = Math.abs(a.y - b.y) < 4;
+            const d = sameRow
+              ? `M ${p1.x} ${a.y + NODE_H} C ${p1.x} ${a.y + NODE_H + 26}, ${p2.x} ${b.y + NODE_H + 26}, ${p2.x} ${b.y + NODE_H}`
+              : `M ${p1.x} ${p1.y} C ${p1.x} ${(p1.y + p2.y) / 2}, ${p2.x} ${(p1.y + p2.y) / 2}, ${p2.x} ${p2.y}`;
             return (
               <path
                 key={e.edgeId}
-                d={`M ${p1.x} ${p1.y} C ${mx} ${p1.y}, ${mx} ${p2.y}, ${p2.x} ${p2.y}`}
+                d={d}
                 fill="none"
-                stroke={edgeVisible(e) ? "#8895aa" : "#e6e9ef"}
-                strokeWidth={edgeVisible(e) && selected ? 1.6 : 1}
-                markerEnd="url(#arrow)"
-                opacity={edgeVisible(e) ? 0.85 : 0.25}
+                stroke={edgeVisible(e) ? stroke : "#e6e9ef"}
+                strokeWidth={edgeVisible(e) && selected ? 1.8 : 1}
+                strokeDasharray={e.drawKind === "governs" ? "3 3" : undefined}
+                markerEnd="url(#gm-arrow)"
+                opacity={edgeVisible(e) ? 0.8 : 0.2}
               />
             );
           })}
 
           {[...layout.positioned.values()].map((n) => {
-            const fill = n.worstSeverity ? SEV_FILL[n.worstSeverity] : "#f2f4f7";
-            const stroke = n.worstSeverity ? SEV_STROKE[n.worstSeverity] : "#c4cad4";
+            const ghost = n.kind === "proposed";
+            // Severity tints documents only. A change or an owed document has no
+            // findings and must never look like it does.
+            const fill =
+              n.kind === "document" && n.worstSeverity
+                ? SEV_FILL[n.worstSeverity]!
+                : KIND_FILL[n.kind]!;
+            const stroke =
+              n.kind === "document" && n.worstSeverity
+                ? SEV_STROKE[n.worstSeverity]!
+                : KIND_STROKE[n.kind]!;
             return (
               <g
-                key={n.recordId}
+                key={n.nodeId}
                 transform={`translate(${n.x},${n.y})`}
-                opacity={isDim(n.recordId) ? 0.28 : 1}
-                onClick={() => setSelected(n.recordId === selected ? null : n.recordId)}
+                opacity={isDim(n.nodeId) ? 0.25 : 1}
+                onClick={() => setSelected(n.nodeId === selected ? null : n.nodeId)}
                 style={{ cursor: "pointer" }}
               >
                 <rect
                   width={NODE_W}
                   height={NODE_H}
-                  rx={7}
+                  rx={6}
                   fill={fill}
-                  stroke={n.recordId === selected ? "#2b6cb0" : stroke}
-                  strokeWidth={n.recordId === selected ? 2.5 : 1.2}
+                  fillOpacity={ghost ? 0.5 : 1}
+                  stroke={n.nodeId === selected ? "#2d5f8a" : stroke}
+                  strokeWidth={n.nodeId === selected ? 2.4 : 1.2}
+                  strokeDasharray={ghost ? "5 4" : undefined}
                 />
-                <text x={NODE_W / 2} y={17} textAnchor="middle" className="gm-label">
-                  {n.docId ?? n.filename.replace(/\.(md|pdf|docx)$/, "")}
+                <text x={10} y={19} className="gm-label">
+                  {n.label.length > 24 ? `${n.label.slice(0, 23)}…` : n.label}
                 </text>
-                <text x={NODE_W / 2} y={31} textAnchor="middle" className="gm-sub">
-                  {n.recordType.replace(/_/g, " ")}
-                  {n.findingCount > 0 ? ` · ${n.findingCount}` : ""}
+                <text x={10} y={34} className="gm-sub">
+                  {n.sublabel.length > 26 ? `${n.sublabel.slice(0, 25)}…` : n.sublabel}
                 </text>
+                {/* Risk badge: the change ledger's score, on the map. */}
+                {n.risk && (
+                  <g transform={`translate(${NODE_W - 34},8)`}>
+                    <rect width={26} height={16} rx={3} fill="#fff" stroke={stroke} strokeWidth={1} />
+                    <text x={13} y={12} textAnchor="middle" className="gm-risk-badge">
+                      {n.risk.score}
+                    </text>
+                  </g>
+                )}
+                {n.risk && n.risk.gapCount > 0 && (
+                  <text x={NODE_W - 8} y={38} textAnchor="end" className="gm-gapcount">
+                    ▲ {n.risk.gapCount}
+                  </text>
+                )}
+                {n.kind === "document" && n.findingCount > 0 && (
+                  <text x={NODE_W - 8} y={19} textAnchor="end" className="gm-sub">
+                    {n.findingCount}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -210,22 +333,55 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
 
       {selectedNode && (
         <aside className="graphmap-panel">
-          <h3>{selectedNode.docId ?? selectedNode.filename}</h3>
+          <h3>{selectedNode.label}</h3>
           <div className="muted">
-            {selectedNode.recordType.replace(/_/g, " ")}
-            {selectedNode.findingCount > 0 && ` · ${selectedNode.findingCount} finding(s)`}
+            {selectedNode.sublabel}
+            {selectedNode.kind === "document" && selectedNode.findingCount > 0 &&
+              ` · ${selectedNode.findingCount} finding(s)`}
           </div>
+
+          {selectedNode.kind === "proposed" && (
+            <p className="gm-owed">
+              No controlled document captures this change. It is drawn here because the
+              record owes one — this is a placeholder, not a document.
+            </p>
+          )}
+
+          {selectedNode.risk && (
+            <div className="gm-risk-detail">
+              <div>
+                Risk <strong>{selectedNode.risk.score}</strong> · {selectedNode.risk.stage.replace(/_/g, " ")}
+                {selectedNode.risk.scoreSource !== "confirmed" &&
+                  selectedNode.risk.scoreSource !== "confirmed_below_floor" && (
+                    <span className="gm-unconfirmed"> · unconfirmed</span>
+                  )}
+              </div>
+              {selectedNode.risk.daysUndocumented !== null && (
+                <div className="muted">
+                  {selectedNode.risk.daysUndocumented} days implemented without a document
+                </div>
+              )}
+              {selectedNode.risk.gapKinds.length > 0 && (
+                <ul className="gm-gaps">
+                  {selectedNode.risk.gapKinds.map((k, i) => (
+                    <li key={i}>{k.replace(/_/g, " ")}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <ul className="gm-edges">
             {selectedEdges.map((e) => (
               <li key={e.edgeId}>
-                {e.srcRecordId === selected ? (
+                {e.srcNodeId === selected ? (
                   <>
                     <span className="gm-kind">{e.kind.replace(/_/g, " ")}</span> →{" "}
-                    {e.dstRecordId ? idFor(e.dstRecordId) : <em>{e.dstRef} (not in scope)</em>}
+                    {e.dstNodeId ? labelFor(e.dstNodeId) : <em>{e.dstRef} (not held)</em>}
                   </>
                 ) : (
                   <>
-                    {idFor(e.srcRecordId)} <span className="gm-kind">{e.kind.replace(/_/g, " ")}</span> → this
+                    {labelFor(e.srcNodeId)} <span className="gm-kind">{e.kind.replace(/_/g, " ")}</span> → this
                   </>
                 )}
               </li>

@@ -2663,18 +2663,183 @@ button.secondary {
   }
 }
 
-/* --- Cross-document map --- */
-.graphmap { display: flex; flex-direction: column; height: calc(100vh - 60px); }
-.graphmap-bar { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border, #e2e4e8); }
-.graphmap-scroll { flex: 1; overflow: auto; padding: 0.5rem; }
-.graphmap-svg { display: block; }
-.gm-label { font-size: 11px; font-weight: 600; fill: #1a2332; }
-.gm-sub { font-size: 9px; fill: #6b7280; }
-.graphmap-panel { position: fixed; right: 0; top: 60px; bottom: 0; width: 300px; background: var(--bg, #fff);
-  border-left: 1px solid var(--border, #e2e4e8); padding: 1rem; overflow: auto; box-shadow: -2px 0 8px rgba(0,0,0,0.05); }
-.gm-edges { list-style: none; padding: 0; margin: 0.75rem 0 0; font-size: 0.85rem; }
-.gm-edges li { padding: 0.35rem 0; border-bottom: 1px solid var(--border, #eef); }
-.gm-kind { font-weight: 600; color: #2b6cb0; }
+/* ---------- document map ---------- */
+
+.graphmap {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 60px);
+  font-size: 13px;
+}
+
+.graphmap-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.gm-broken {
+  color: var(--high-line);
+  font-weight: 600;
+}
+
+/* The change ledger's accumulated risk, on the map it belongs to. Reports the
+   customer's own threshold — never a submission verdict. */
+.gm-risk {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.gm-risk.crossed {
+  background: var(--high-bg);
+  box-shadow: inset 3px 0 0 var(--high-line);
+}
+
+.gm-risk-num {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.gm-risk.crossed .gm-risk-num {
+  color: var(--high-line);
+}
+
+.graphmap-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+
+.graphmap-svg {
+  display: block;
+}
+
+.gm-lane {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.gm-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: #1a2332;
+}
+
+.gm-sub {
+  font-size: 9px;
+  fill: #6b7280;
+}
+
+.gm-risk-badge {
+  font-size: 10px;
+  font-weight: 700;
+  fill: #1a2332;
+}
+
+.gm-gapcount {
+  font-size: 9px;
+  font-weight: 700;
+  fill: #b8860b;
+}
+
+.graphmap-panel {
+  position: fixed;
+  right: 0;
+  top: 60px;
+  bottom: 0;
+  width: 300px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  padding: 16px;
+  overflow: auto;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
+}
+
+.graphmap-panel h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* An owed document is a placeholder, not a document. It says so in words as
+   well as in a dashed outline, because the outline alone is a colour-and-shape
+   cue and this distinction is too important to rest on that. */
+.gm-owed {
+  margin: 10px 0;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--high-bg);
+  border-left: 3px solid var(--high-line);
+  border-radius: 4px;
+  text-wrap: pretty;
+}
+
+.gm-risk-detail {
+  margin: 12px 0;
+  padding: 9px 11px;
+  background: var(--bg);
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.gm-unconfirmed {
+  color: var(--med-line);
+}
+
+.gm-gaps {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+}
+
+.gm-gaps li {
+  font-size: 11px;
+  color: var(--med-line);
+  padding: 2px 0 2px 12px;
+  position: relative;
+}
+
+.gm-gaps li::before {
+  content: "▲";
+  position: absolute;
+  left: 0;
+  font-size: 8px;
+  top: 4px;
+}
+
+.gm-edges {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.gm-edges li {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.gm-kind {
+  font-weight: 600;
+  color: var(--accent);
+}
 
 /* --- Run a review: rule selector, document groups, cross-check ---
  *
