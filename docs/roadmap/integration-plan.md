@@ -1,308 +1,217 @@
-# Integrating Changes and Map into one pipeline
+# One pathway: change → document → review → map
 
-A plan for making the five tabs behave as one product: a single spine, one
-notion of "what's outstanding", and a way to see the evidence behind every
-claim from anywhere in the app.
+A plan for making Changes, Documents, Review and Map behave as a single
+pipeline, followed from the place work actually starts — an engineer typing
+what they changed — to the place it becomes defensible: a map of the record
+with its holes visible.
 
-Written 2026-08-20. Companion to `execution-plan.md` (the Cass roadmap, now
-built) and `SESSION-HANDOFF.md`.
-
----
-
-## 1. Diagnosis
-
-Five sibling tabs, each a terminal destination.
-
-`ChangeLedger` and `GraphMap` are handed exactly one prop — `onAuthError`. They
-cannot navigate anywhere, and nothing can navigate into them. That is the whole
-integration problem in one line of `App.tsx`.
-
-Underneath it are four structural facts:
-
-**1. The spine does not exist in the data.** `records` has no device or project
-column. `PROJECTS` in `App.tsx` is a hardcoded one-element array. `baselines.device`
-is a free-text string. Every idea below that begins "scope this to a device"
-is blocked on a schema change that does not exist yet. This is the prerequisite.
-
-**2. There is no routing.** Navigation is `useState<Page>`. You cannot link to a
-finding, a change, or a document. In a tool whose users email each other
-evidence and paste it into audit responses, deep links are a feature, not a
-nicety — and every cross-surface idea below silently assumes them.
-
-**3. The joins already exist and are invisible.** `changes.record_id` links a
-change to the controlled document that captures it — and that document has
-findings, and those findings may be *about the very change*. Nothing surfaces
-that. Graph nodes already carry `worstSeverity` and `findingCount`; both render
-as dead text in a panel that cannot open them.
-
-**4. There are four incompatible models of "a gap".**
-
-| Source | Evidence standard | Severity? | Where it lives |
-|---|---|---|---|
-| `findings` | verbatim quote, hallucination-guarded | yes, derived | Findings tab |
-| `change_gaps` | deterministic **or** model-inferred | never | Changes tab |
-| `danglingRefs` | deterministic, computed on read | no | Map tab |
-| coverage holes | not modelled at all | no | nowhere |
-
-The product's entire promise is "find the gaps before FDA does". It currently
-cannot answer *"what is outstanding on this device?"*, because the answer is
-split four ways across three tabs and one place that doesn't exist.
-
-That fourth row is the interesting one. Nothing today tells a reviewer that a
-document has **never been reviewed**, or was reviewed under a superseded
-`CORPUS_VERSION`, or that an implemented change has **no document at all**.
-Those are gaps in the record of exactly the kind an investigator finds, and the
-product is silent about them.
+Written 2026-08-20. Supersedes the earlier draft of this file. Companion to
+`execution-plan.md` and `SESSION-HANDOFF.md`.
 
 ---
 
-## 2. The reframe
+## 1. The pathway
 
-Stop treating Changes and Map as *places*. They are **lenses on one object
-graph**.
+Everything below serves one line:
 
-- The **objects** are documents and changes (plus submissions and runs).
-- Findings, change gaps, dangling references and coverage holes are all
-  **gaps** — one concept, observed at different evidence tiers.
-- The **map** is not a destination. It is the *structure* lens over those
-  objects.
+```
+engineer records a change
+  └─> a document-shaped hole appears in the record
+        └─> someone attaches the document that captures it
+              └─> the document is reviewed
+                    └─> findings and reference problems surface on the map
+                          └─> the change is bundled into a submission
+                                └─> clearance folds it into the baseline
+```
 
-Four moves follow:
+Six steps. Today the first lives in Changes, the third in Run a review, the
+fourth in Findings, the fifth in Map, and **nothing carries you between them**.
 
-1. **One spine** — the device. Everything filters by it.
-2. **One gap ledger** — a read-model unioning all four sources, carrying an
-   explicit evidence tier.
-3. **One drawer** — a deep-linkable overlay that opens any object from anywhere.
-4. **Every number is a link.**
+The single idea that stitches them together is step two.
 
 ---
 
-## 3. The pipeline
+## 2. The idea: a proposed change is a document that does not exist yet
 
-This is what "seamless" has to mean concretely. Every object sits somewhere on
-one line:
+When an engineer records a change, the product already knows something
+important and does nothing with it: **a controlled document is now owed.**
 
-```
-change occurs
-  └─> captured in a controlled document
-        └─> document reviewed against the corpus
-              └─> findings triaged
-                    └─> remediated
-                          └─> change bundled into a submission
-                                └─> cleared  ──> new baseline, accumulation resets
-```
+So the moment a change is recorded, it appears on the map as a **ghost node** —
+dashed, in the change-documents lane, labelled with the proposal. It is a
+placeholder for the document that must exist and does not.
 
-Transparency, stated precisely, is three questions answerable for any object:
+That one move does four things at once:
 
-- **Where is it** on that line?
-- **What is blocking it** from moving?
-- **What evidence** stands behind every claim the product is making about it?
+- the map stops being a picture of what you have and becomes a picture of
+  **what the record should contain**, which is the thing an investigator
+  actually compares you against;
+- the Changes tab and the Map tab are now the same object seen twice, so
+  linking them is natural rather than bolted on;
+- "attach a document" becomes a visible, satisfying state change — the ghost
+  turns solid;
+- the count of ghosts *is* the undocumented-exposure pool the gauge already
+  totals, drawn instead of summed.
 
-The app can answer none of the three today without changing tabs and
-reconciling by eye.
-
----
-
-## 4. Architecture
-
-### 4.1 The Gap read-model — the core of the plan
-
-One typed union, computed server-side on read, never stored (storing it would
-let it drift from its sources, the same reasoning that keeps deterministic
-change gaps out of the database today):
-
-```ts
-type EvidenceTier =
-  | "quoted"         // verbatim quote located in the document — findings only
-  | "deterministic"  // computed by code: comparator, dangling ref, coverage
-  | "inferred"       // model suggestion, unconfirmed, nothing to quote
-  | "confirmed";     // a human signed it
-
-interface Gap {
-  gapId: string;
-  deviceId: string;
-  kind: "finding" | "change_gap" | "dangling_ref" | "coverage";
-  stage: PipelineStage;                       // where on §3 it blocks
-  subject: { type: "record" | "change" | "submission"; id: string; label: string };
-  evidence: EvidenceTier;
-  severity?: "high" | "medium" | "low";       // findings ONLY — see below
-  detail: string;
-  citation?: string;
-  quote?: string;
-}
-```
-
-**`evidence` is a safety mechanism, not a display hint.** Merging four gap
-sources into one list is precisely how a model-inferred change gap ends up
-looking as authoritative as a quote-anchored finding. So:
-
-- the tier is **structural** — in the type, set at the source, not decided by
-  the UI;
-- `inferred` gaps **must never carry a severity**, matching the invariant
-  `changeLedger.ts` and `customerSchema.sql` already enforce;
-- the UI must render tiers visibly differently, not merely sort by them.
-
-CLAUDE.md already protects this separation. The union must not launder it.
-
-**New information this model surfaces** (the `coverage` kind, which exists
-nowhere today):
-
-- a document never reviewed;
-- a document last reviewed under a superseded `CORPUS_VERSION` or
-  `PROMPT_VERSION` — findings from different versions are explicitly *not
-  comparable*, so this is a real staleness signal;
-- an implemented change with no `record_id`;
-- a document nothing cites and which cites nothing (an orphan in the graph).
-
-### 4.2 The device spine
-
-- `devices` table; `records.device_id`; `baselines.device_id`.
-- Backfill one device (Northlake VP-400) and attach every existing record.
-- The top-bar picker becomes real, and every read filters by it.
-
-Note the subtlety: **device ≠ baseline.** A device accumulates successor
-baselines as submissions clear (`clearSubmission` already mints them and links
-`superseded_by`). The spine is the *device*; its current baseline is a property.
-
-### 4.3 The universal object drawer
-
-One overlay, deep-linkable, that opens for any object id:
-
-```
-#/device/:deviceId/record/:id
-#/device/:deviceId/change/:id
-#/device/:deviceId/finding/:runId/:id
-#/device/:deviceId/submission/:id
-```
-
-Contents, in order: **identity → position in the pipeline → open gaps →
-relationships (graph neighbourhood mini-map) → evidence chain → actions.**
-
-This is the actual seamlessness mechanism. You never lose your place, and any
-surface can link to any object without either surface knowing about the other.
-
-### 4.4 The evidence chain — "how do we know this?"
-
-Fully reconstructible from data already stored. Nothing new to persist:
-
-**For a finding:** finding → rule → rule source (CFR paragraph / FDA guidance /
-SOP clause) → severity basis (citation frequency, percentile, harm linkage) →
-the run (model, effort, `corpus_version`, `prompt_version`) → the verbatim quote
-→ the block → the document.
-
-**For a change score:** type floor (and the flowchart branch it comes from) →
-model suggestion + rationale → human confirmation (who, when) → below-floor
-rationale if any → contribution to exposure → threshold and the SOP clause that
-sets it.
-
-This is the Fresenius ask — consistent, defensible, repeat-run output — rendered
-as a screen. It is also the strongest demo artifact in the plan, because it is
-the one thing no competitor's black box can show.
+Nothing new needs storing. A ghost node is any change where
+`stage IN ('proposed','implemented')` and `record_id IS NULL`.
 
 ---
 
-## 5. Navigation after
+## 3. The map, simplified
 
-```
-[Device ▾]   Readiness · Documents · Changes · Review · Procedures
-                                                   (+ object drawer overlay)
-```
+The current graph is a force-laid blob with **seven edge kinds**
+(`references`, `governed_by`, `supersedes`, `modifies`, `verifies`,
+`implements`, `escalates_to`). It is unreadable at 24 nodes and meaningless at
+10,000.
 
-- **Readiness** — new home. Pipeline stages with counts, the gap ledger, the
-  accumulated-risk gauge, coverage statistics.
-- **Documents** — the record list, plus a **Structure** lens (the map, as a view
-  mode).
-- **Changes** — the existing stage board and gauge, now cross-linked.
-- **Review**, **Procedures** — unchanged.
+Three changes fix it.
 
-### Why the map gets demoted
+### 3.1 Lanes instead of a blob
 
-A 24-node graph is a demo. At ten thousand documents it is noise, and the
-Fresenius pitch is explicitly "review everything, not a sample". The map's real
-value is two things, and neither is a global canvas:
+Every node gets a lane from its role, and the flow runs top to bottom:
 
-1. **the neighbourhood of one document** — what it cites, what cites it. That is
-   a drawer feature.
-2. **structural gaps** — dangling references and orphans. Those are gap-ledger
-   rows.
+| Lane | Holds | Source |
+|---|---|---|
+| **Cleared record** | the design history as cleared — design inputs/outputs, risk file, V&V, traceability | `records` of design types |
+| **Triggers** | why a change happened — CAPAs, complaints, NCRs, 483 observations | `records` of issue types |
+| **Propositions** | changes since clearance, proposed and implemented | `changes` |
+| **Change documents** | the DCOs and updated design docs that capture them — **plus the ghosts** | `records` via `changes.record_id`, ghosts where null |
+| **Submission** | what has been bundled and filed | `submissions` |
 
-As a tab it is decorative. As a lens plus a drawer mini-map it becomes
-load-bearing, and it stops being a thing users must remember to visit.
+Procedures (SOPs) are not a lane. They govern everything, so they sit in a
+collapsed band and only draw a line when you select a node.
+
+### 3.2 Deterministic layout
+
+Lane by record type, order within lane by document date, no force simulation.
+
+This matters more than it sounds. A graph that rearranges itself on every load
+cannot be screenshotted into an audit response, and it quietly contradicts the
+repeat-run consistency Fresenius asked for by name. **Same data, same picture.**
+It is also far less code than a force layout.
+
+### 3.3 Three line kinds, not seven
+
+| Line | Means | Built from |
+|---|---|---|
+| **solid** | derives from — this exists because of that | `supersedes`, `modifies`, `implements`, `references` |
+| **dotted** | governed by — a procedure constrains this | `governed_by` |
+| **dashed red** | **broken** — the link does not resolve | dangling refs, ghost documents |
+
+The seven kinds stay in the data (`graph.ts` already classifies them and the
+drawer can show the specific verb). They collapse only for *drawing*, because
+the eye can hold three line weights and cannot hold seven.
+
+Edges run between adjacent lanes wherever possible, which is what makes the
+picture read as a flow rather than a web.
+
+---
+
+## 4. Key issues in inter-document references
+
+These are the things worth flagging, all computable, roughly in order of value:
+
+**1. Missing document.** A change is implemented and no record captures it. The
+ghost node. Already derivable, never surfaced.
+
+**2. Dangling reference.** A document cites a document id we do not hold.
+Already computed in `graph.ts` as `danglingRefs`; currently displayed as a
+count in a corner of the Map and nowhere else.
+
+**3. Stale companion.** A change document cites a governing document — the risk
+file, the traceability matrix — whose own revision predates the change. The
+change happened; the thing that should have been updated with it was not.
+
+  *Caveat worth respecting:* `records.created_at` is upload time, not document
+  date. Doing this honestly means using `records.revision` or an extracted
+  document date, and saying "we could not determine a date" rather than
+  inferring one from when a file happened to be uploaded. An upload-time
+  heuristic here would produce confident nonsense.
+
+**4. Orphan.** A document nothing cites and which cites nothing. Either it is
+outside the design history or the references that should reach it are missing.
+
+**5. Unreviewed / stale review.** A document with no run, or whose last run used
+a superseded `CORPUS_VERSION` or `PROMPT_VERSION`. Findings across versions are
+explicitly not comparable, so this is a real gap in coverage — and today nothing
+says it out loud.
+
+**6. Cluster with no aggregate assessment.** Several changes touching one
+subsystem. Already computed as GP6 in `cumulativeAssessment`; belongs on the map
+as a highlighted lane region, not only as a line of text in Changes.
+
+Items 1–4 are *reference* problems and belong to the map. 5–6 are *coverage*
+problems and belong wherever the pathway shows a step. All six should be the
+same clickable object so a reviewer can work a single list.
+
+---
+
+## 5. What each surface becomes
+
+**Changes** — unchanged in substance; gains an "open in map" and, once a
+document is attached, a direct link to that document's findings.
+
+**Run a review** — gains an entry point from a change: *review the document that
+captures this change*, with cross-check pre-seeded to the documents that change
+touches (its lane neighbours). This is the step that currently requires the user
+to remember a filename.
+
+**Findings** — gains the reverse link: *this document captures change X*, so a
+reviewer reading a finding about a DCO can see which change it belongs to and
+what that change's accumulated risk is.
+
+**Map** — becomes the pathway's picture: lanes, ghosts, three line kinds, and
+the six issues above rendered on the nodes they belong to.
+
+**Readiness (new, small)** — not a dashboard. A short list: ghosts, dangling
+refs, stale companions, unreviewed documents. The pathway's outstanding work in
+one place, each row opening the object it names.
 
 ---
 
 ## 6. Phases
 
-| Phase | What | Est. | Gate |
-|---|---|---|---|
-| **0** | Substrate: hash routing + device spine (schema, backfill, real filtering) | ~3d | none |
-| **1** | Make every number a link | ~2d | needs 0 |
-| **2** | Gap read-model + `GET /api/devices/:id/gaps` | ~5d | **precision gate** |
-| **3** | Readiness home | ~5d | needs 2 |
-| **4** | Object drawer + evidence chain | ~6d | needs 0 |
-| **5** | Map as lens; dangling refs/orphans into the gap ledger | ~3d | needs 2 |
-| — | *Stretch:* point-in-time view | — | defer |
+| Phase | What | Est. |
+|---|---|---|
+| **0** | Routing + device spine (schema, backfill, real filtering) | ~3d |
+| **1** | Ghost nodes: derive them, draw them, link change ↔ node | ~3d |
+| **2** | Lane layout + three line kinds, deterministic | ~4d |
+| **3** | Pathway links: change → document → review → findings, both directions | ~3d |
+| **4** | Reference issues 2–4 computed and drawn on nodes | ~4d |
+| **5** | Coverage issues 5–6, and the small Readiness list | ~4d |
 
-**Phase 0 is a true prerequisite.** Nothing composes without routing and a
-device column.
+**Phase 0 is still a hard prerequisite.** `records` has no device column,
+`PROJECTS` is a hardcoded one-element array, and navigation is `useState` with
+no URLs — so nothing is linkable and nothing is scoped until this exists.
 
-**Phase 1 is the cheapest real win in this document.** Graph node "12 findings"
-opens the findings. A change marked documented opens its document. A subsystem
-cluster count opens the filtered list. No new concepts, no schema, immediate
-payoff — worth doing on its own even if the rest slips.
+**Phases 1 and 2 are the demo.** Ghosts plus lanes turn the map from a curiosity
+into the product's clearest single image: *here is your design history, and here
+are the holes in it.* If only two phases ship, these are the two.
 
-**Phase 4 can run in parallel with 2/3.** The drawer needs only the spine and
-routing; the evidence chain reads tables that already exist.
-
-**Stretch — point in time.** Every timestamp needed already exists
-(`runs`, `changes.implemented_at/documented_at`, `submissions.filed_at`,
-`records.created_at`). "Show me what an investigator would have seen in March"
-is a compelling story and a genuine audit capability. Defer until the spine and
-the gap model are real, or it becomes a fifth incompatible view of the truth.
+**Phase 3 is the seamlessness** the pathway is named for, and it is mostly
+wiring — the joins already exist in the data.
 
 ---
 
-## 7. Risks, and things worth arguing about
+## 7. Risks
 
-**1. Do not build a single "readiness score."** It is the most tempting number
-in this plan and it is the same class of error as the submit/don't-submit
-verdict: one composite figure reads as a judgment about regulatory standing, and
-the manufacturer's own staff will quote it to auditors. Use **counts per
-pipeline stage**. If a headline number is wanted, make it an explicit coverage
-fact — *"38 of 41 documents reviewed against corpus 2026.08.4"* — which is
-checkable, not a grade.
+**1. Ghost nodes must never be mistaken for documents.** A dashed placeholder
+labelled with an engineer's free text sitting in a diagram of controlled
+documents is exactly the kind of thing that gets screenshotted and misread. It
+needs a permanent visual and textual distinction — not a colour alone — and it
+must never carry a document id, a severity, or a finding count.
 
-**2. Do not flatten the evidence tiers.** See §4.1. This is the one change in
-this plan that could quietly break a doctrine the codebase currently enforces in
-three places.
+**2. The stale-companion check needs a real document date.** See §4.3. This is
+the one item here that can produce confident nonsense from a plausible-looking
+proxy.
 
-**3. Precision is still unmeasured, and this plan multiplies finding surface.**
-The top open item in `SESSION-HANDOFF.md` remains the exhaustive eval fixture
-and the precision gate that depends on it. Recall is ~80%; precision is not
-computed at all. Phases 0 and 1 add no new gap surface and are safe to do now.
-**Phase 2 adds four new gap kinds at once** — shipping that before precision is
-measurable means adding unmeasured noise to a surface whose entire credibility
-is that it does not waste a reviewer's time. Build the fixture first.
+**3. Precision is still unmeasured.** Recall is ~80%, precision is not computed,
+and the exhaustive eval fixture remains the top open item in `SESSION-HANDOFF.md`.
+Phases 0–3 add *navigation*, not new findings, and are safe now. Phases 4–5 add
+new flag kinds — build the fixture first, or ship them behind a toggle and
+measure before making them loud.
 
-**4. The graph stays computed on read** until a customer genuinely has thousands
-of documents, per CLAUDE.md. Phase 5 must not quietly materialise edges to make
-a lens feel faster.
-
-**5. Deep links have an access-control edge.** A shareable `#/device/…/finding/…`
-URL is only as safe as the session check behind it. Findings embed verbatim
-customer quotes; the drawer must fetch through the authenticated API, never
-render from a URL-encoded payload.
-
----
-
-## 8. What this buys, in one sentence each
-
-- A reviewer opens **one screen** and sees everything outstanding on a device,
-  ranked, with the evidence tier of each item visible.
-- Any number anywhere is a **link** to the thing it counts.
-- Any object opens in the **same drawer**, from any surface, with a URL that can
-  be pasted into an email.
-- For any claim the product makes, there is a **chain** back to the regulation,
-  the run that produced it, and the quoted text.
-- The map stops being a curiosity and becomes the thing that explains **why a
-  document matters** — what depends on it.
+**4. Layout stays deterministic and computed on read.** No force simulation, no
+materialised edges, until a customer genuinely has thousands of documents.
+Both are cheap now and both are the kind of thing that gets "optimised" into
+instability later.
