@@ -149,6 +149,13 @@ export function RunReview({
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState("capa");
   const fileInput = useRef<HTMLInputElement>(null);
+  // Replace-in-place: a second hidden input whose file targets one record.
+  const replaceInput = useRef<HTMLInputElement>(null);
+  const [replaceTarget, setReplaceTarget] = useState<string | null>(null);
+  // Which document-type sub-dropdowns are collapsed in the picker.
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
+  // Whether the "adjust cross-check targets" dropdown is open.
+  const [showCrossTargets, setShowCrossTargets] = useState(false);
 
   useEffect(() => {
     api
@@ -161,10 +168,14 @@ export function RunReview({
   }, []);
 
   // Default to the most recently touched document so the page is usable on
-  // arrival rather than requiring a selection before anything makes sense.
+  // arrival rather than requiring a selection before anything makes sense, and
+  // default cross-check to comparing against every other document — the common
+  // case, and what the consistency pass is for.
   useEffect(() => {
     if (picked.size === 0 && records.length > 0) {
-      setPicked(new Set([records[0]!.recordId]));
+      const first = records[0]!.recordId;
+      setPicked(new Set([first]));
+      setCrossCheck(new Set(records.filter((r) => r.recordId !== first).map((r) => r.recordId)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records.length]);
@@ -194,6 +205,33 @@ export function RunReview({
   // Only documents not already under review can be cross-check targets: a record
   // compared against itself agrees with itself on everything.
   const unpicked = ordered.filter((r) => !picked.has(r.recordId));
+
+  // Documents grouped by type, in the RECORD_TYPES order, for the collapsible
+  // per-type sub-lists. A type with no documents is omitted.
+  const docGroups = useMemo(() => {
+    const byType = new Map<string, RecordSummary[]>();
+    for (const r of ordered) {
+      if (!byType.has(r.recordType)) byType.set(r.recordType, []);
+      byType.get(r.recordType)!.push(r);
+    }
+    const known = RECORD_TYPES.map((t) => t.value);
+    const order = [...known, ...[...byType.keys()].filter((t) => !known.includes(t))];
+    return order
+      .filter((t) => byType.has(t))
+      .map((t) => ({
+        type: t,
+        label: RECORD_TYPES.find((x) => x.value === t)?.label ?? t.replace(/_/g, " "),
+        docs: byType.get(t)!,
+      }));
+  }, [ordered]);
+
+  // "Compare to all" makes every other document a cross-check target and also
+  // checks the selected documents against each other; "none" clears both.
+  const setCompareAll = (all: boolean) => {
+    setCrossCheck(all ? new Set(unpicked.map((r) => r.recordId)) : new Set());
+    setCrossCheckSelected(all && pickedRecords.length > 1);
+  };
+  const comparingCount = crossCheck.size + (crossCheckSelected ? pickedRecords.length : 0);
 
   // Rules are filtered to the selected documents' types. With several types
   // picked, a rule is offered if it applies to any of them — the per-document
@@ -350,6 +388,32 @@ export function RunReview({
     [uploadType, onRefreshRecords],
   );
 
+  const onReplace = useCallback(
+    async (recordId: string, file: File) => {
+      setError(null);
+      setNotice(null);
+      setUploading(true);
+      try {
+        const result = await api.replaceRecord(recordId, file);
+        setNotice(
+          result.warning ??
+            `Replaced ${result.filename} — ${result.blocks} blocks` +
+              (result.discardedFindings
+                ? `, ${result.discardedFindings} finding(s) from the old version cleared.`
+                : "."),
+        );
+        await onRefreshRecords();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setUploading(false);
+        setReplaceTarget(null);
+        if (replaceInput.current) replaceInput.current.value = "";
+      }
+    },
+    [onRefreshRecords],
+  );
+
   const onRetype = useCallback(
     async (r: RecordSummary, recordType: string) => {
       setError(null);
@@ -487,6 +551,16 @@ export function RunReview({
                 if (f) void onUpload(f);
               }}
             />
+            <input
+              ref={replaceInput}
+              type="file"
+              accept=".pdf,.docx,.md,.txt"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f && replaceTarget) void onReplace(replaceTarget, f);
+              }}
+            />
             <button
               className="act accept"
               disabled={uploading}
@@ -501,52 +575,91 @@ export function RunReview({
           <p className="muted">No documents yet. Upload one to get started.</p>
         )}
 
+        {/* Grouped by document type — a collapsible sub-list per type, so a
+            growing project stays navigable and it is obvious what is present. */}
         <div className="doclist">
-          {ordered.map((r) => {
-            const on = picked.has(r.recordId);
+          {docGroups.map((g) => {
+            const collapsed = collapsedTypes.has(g.type);
+            const pickedInType = g.docs.filter((d) => picked.has(d.recordId)).length;
             return (
-              <div key={r.recordId} className={`docrow ${on ? "on" : ""}`}>
-                <label className="docrow-main">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => togglePicked(r.recordId)}
-                  />
-                  <span className="docrow-name">{r.docId ?? r.filename}</span>
-                </label>
-                {/* Editable, not a badge: the type decides which rules apply, and
-                    a document uploaded under the wrong one is reviewed against
-                    the wrong requirements — or against none. */}
-                <select
-                  className="docrow-type"
-                  value={r.recordType}
-                  title="Document type — decides which requirements apply"
-                  onChange={(e) => void onRetype(r, e.target.value)}
-                >
-                  {/* A controlled select whose value is not among its options
-                      displays the first option instead, so the row would claim a
-                      type the document does not have and the next interaction
-                      would silently commit it. Keep an escape hatch for any
-                      record type this list does not know about. */}
-                  {!RECORD_TYPES.some((t) => t.value === r.recordType) && (
-                    <option value={r.recordType}>{r.recordType.replace(/_/g, " ")}</option>
-                  )}
-                  {RECORD_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                <span className="docrow-runs">
-                  {r.runs === 0 ? "never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
-                </span>
-                <button
-                  className="docrow-del"
-                  title="Delete this document and all its findings"
-                  onClick={() => void onDelete(r)}
-                >
-                  ×
-                </button>
+              <div key={g.type} className="doctype-group">
+                <div className="doctype-head">
+                  <button
+                    className="doctype-toggle"
+                    onClick={() =>
+                      setCollapsedTypes((prev) => {
+                        const next = new Set(prev);
+                        next.has(g.type) ? next.delete(g.type) : next.add(g.type);
+                        return next;
+                      })
+                    }
+                  >
+                    <span className="rc-chevron">{collapsed ? "▸" : "▾"}</span>
+                    {g.label}
+                    <span className="rc-badge">
+                      {pickedInType > 0 ? `${pickedInType}/` : ""}
+                      {g.docs.length}
+                    </span>
+                  </button>
+                </div>
+
+                {!collapsed &&
+                  g.docs.map((r) => {
+                    const on = picked.has(r.recordId);
+                    return (
+                      <div key={r.recordId} className={`docrow ${on ? "on" : ""}`}>
+                        <label className="docrow-main">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => togglePicked(r.recordId)}
+                          />
+                          <span className="docrow-name">{r.docId ?? r.filename}</span>
+                        </label>
+                        {/* Editable, not a badge: the type decides which rules
+                            apply, and a document uploaded under the wrong one is
+                            reviewed against the wrong requirements — or none. */}
+                        <select
+                          className="docrow-type"
+                          value={r.recordType}
+                          title="Document type — decides which requirements apply"
+                          onChange={(e) => void onRetype(r, e.target.value)}
+                        >
+                          {!RECORD_TYPES.some((t) => t.value === r.recordType) && (
+                            <option value={r.recordType}>
+                              {r.recordType.replace(/_/g, " ")}
+                            </option>
+                          )}
+                          {RECORD_TYPES.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="docrow-runs">
+                          {r.runs === 0 ? "never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
+                        </span>
+                        <button
+                          className="docrow-replace"
+                          title="Replace this document's file, keeping its place and history slot"
+                          disabled={uploading}
+                          onClick={() => {
+                            setReplaceTarget(r.recordId);
+                            replaceInput.current?.click();
+                          }}
+                        >
+                          ⟳
+                        </button>
+                        <button
+                          className="docrow-del"
+                          title="Delete this document and all its findings"
+                          onClick={() => void onDelete(r)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
               </div>
             );
           })}
@@ -561,64 +674,79 @@ export function RunReview({
         </p>
       </section>
 
-      {/* 2 — cross-check. Available regardless of how many documents are under
-             review: each reviewed document is checked against the same targets. */}
+      {/* 2 — cross-check: compare against all other documents, or none, with a
+             dropdown to deselect individual targets. */}
       {records.length > 1 && (
         <section className="rp-section">
           <div className="rp-head">
-            <h2>Cross-check against</h2>
+            <h2>Cross-check</h2>
             <span className="muted small">
               finds facts that disagree between documents — risk ratings, dates, thresholds
             </span>
           </div>
 
-          {pickedRecords.length > 1 && (
-            <label className="rc-opt rp-eachother">
-              <input
-                type="checkbox"
-                checked={crossCheckSelected}
-                onChange={(e) => setCrossCheckSelected(e.target.checked)}
-              />
-              also check the {pickedRecords.length} selected documents against{" "}
-              <strong>each other</strong>
-              <span className="muted small">
-                {" "}
-                — facts are extracted once per document and cached, so this costs
-                little beyond the first pass
-              </span>
-            </label>
-          )}
-
-          <div className="doclist">
-            {unpicked.length === 0 && (
-              <p className="muted small">
-                Every document is selected for review. Untick one to use it as a
-                cross-check target instead
-                {pickedRecords.length > 1 ? ", or use the option above." : "."}
-              </p>
-            )}
-            {unpicked.map((r) => (
-              <label
-                key={r.recordId}
-                className={`docrow ${crossCheck.has(r.recordId) ? "on" : ""}`}
+          <div className="cross-controls">
+            <div className="seg">
+              <button
+                className={`seg-btn ${comparingCount > 0 ? "on" : ""}`}
+                onClick={() => setCompareAll(true)}
               >
-                <span className="docrow-main">
-                  <input
-                    type="checkbox"
-                    checked={crossCheck.has(r.recordId)}
-                    onChange={() => toggleCross(r.recordId)}
-                  />
-                  <span className="docrow-name">{r.docId ?? r.filename}</span>
-                </span>
-                <span className="docrow-typeflat">{r.recordType.replace(/_/g, " ")}</span>
-              </label>
-            ))}
+                Compare to all
+              </button>
+              <button
+                className={`seg-btn ${comparingCount === 0 ? "on" : ""}`}
+                onClick={() => setCompareAll(false)}
+              >
+                None
+              </button>
+            </div>
+            <span className="muted small">
+              {comparingCount === 0
+                ? "Not comparing — the consistency pass will not run."
+                : `Comparing each reviewed document against ${comparingCount} other${
+                    comparingCount === 1 ? "" : "s"
+                  }.`}
+            </span>
+            {(unpicked.length > 0 || pickedRecords.length > 1) && (
+              <button className="rc-mini" onClick={() => setShowCrossTargets((v) => !v)}>
+                {showCrossTargets ? "▾ hide targets" : "▸ adjust targets"}
+              </button>
+            )}
           </div>
 
-          {crossCheck.size === 0 && !crossCheckSelected && (
-            <p className="muted small rp-foot">
-              Nothing to compare against — the consistency pass will not run.
-            </p>
+          {showCrossTargets && (
+            <div className="doclist cross-targets">
+              {pickedRecords.length > 1 && (
+                <label className="docrow">
+                  <span className="docrow-main">
+                    <input
+                      type="checkbox"
+                      checked={crossCheckSelected}
+                      onChange={(e) => setCrossCheckSelected(e.target.checked)}
+                    />
+                    <span className="docrow-name">
+                      the {pickedRecords.length} selected documents, against each other
+                    </span>
+                  </span>
+                </label>
+              )}
+              {unpicked.map((r) => (
+                <label
+                  key={r.recordId}
+                  className={`docrow ${crossCheck.has(r.recordId) ? "on" : ""}`}
+                >
+                  <span className="docrow-main">
+                    <input
+                      type="checkbox"
+                      checked={crossCheck.has(r.recordId)}
+                      onChange={() => toggleCross(r.recordId)}
+                    />
+                    <span className="docrow-name">{r.docId ?? r.filename}</span>
+                  </span>
+                  <span className="docrow-typeflat">{r.recordType.replace(/_/g, " ")}</span>
+                </label>
+              ))}
+            </div>
           )}
         </section>
       )}

@@ -710,6 +710,72 @@ app.post("/api/records", upload.single("file"), async (req, res) => {
   });
 });
 
+/**
+ * Replace a document's file in place, keeping its identity.
+ *
+ * The workflow this removes: upload a new version, then hunt down and delete the
+ * old one. Here the new file takes over the existing record id and type, so a
+ * revised document stays the same document. saveRecord re-blocks it and, because
+ * the content hash changes, discards findings from the prior version — those
+ * were about text that no longer exists, and keeping them would anchor
+ * highlights into a document that changed underneath them.
+ */
+app.post("/api/records/:recordId/replace", upload.single("file"), async (req, res) => {
+  const uploaded = req.file;
+  if (!uploaded) return res.status(400).json({ error: "no file in request" });
+
+  const existing = await getCustomerDb()
+    .prepare(`SELECT record_id, record_type FROM records WHERE record_id = ?`)
+    .get<{ record_id: string; record_type: string }>(req.params.recordId);
+  if (!existing) return res.status(404).json({ error: "record not found" });
+
+  if (!detectFormat(uploaded.originalname)) {
+    return res.status(415).json({
+      error: `unsupported file type: ${extname(uploaded.originalname) || "(none)"}. ` +
+        `Supported: .pdf, .docx, .md, .txt`,
+    });
+  }
+
+  const parsedType = RecordType.safeParse(req.body["recordType"] ?? existing.record_type);
+  const recordType = parsedType.success ? parsedType.data : (existing.record_type as never);
+
+  const storedPath = join(uploadDir, safeStoredName(uploaded.originalname));
+  writeFileSync(storedPath, uploaded.buffer);
+
+  let extracted;
+  try {
+    extracted = await extractRecord({ path: storedPath, recordType });
+  } catch (err) {
+    return res.status(422).json({
+      error: err instanceof Error ? err.message : "could not read the document",
+    });
+  }
+
+  // Keep the existing identity: the new file IS this record now.
+  extracted.record.recordId = existing.record_id;
+  extracted.record.filename = basename(uploaded.originalname);
+  // Blocks are keyed to the record id, so re-key them too.
+  extracted.blocks = extracted.blocks.map((b, i) => ({
+    ...b,
+    recordId: existing.record_id,
+    blockId: `${existing.record_id}:b${i}`,
+  }));
+  const { discardedFindings } = await saveRecord(extracted.record, extracted.blocks);
+
+  res.json({
+    recordId: extracted.record.recordId,
+    filename: extracted.record.filename,
+    recordType: extracted.record.recordType,
+    docId: extracted.record.docId,
+    revision: extracted.record.revision,
+    format: extracted.format,
+    pageCount: extracted.pageCount ?? null,
+    blocks: extracted.blocks.length,
+    discardedFindings,
+    warning: extracted.warning ?? null,
+  });
+});
+
 const RecordPatchBody = z.object({ recordType: RecordType });
 
 /**

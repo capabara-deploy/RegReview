@@ -18,6 +18,14 @@ import { RunReview } from "./RunReview";
 type Page = "run" | "findings" | "procedures" | "changes" | "map";
 
 /**
+ * Projects — a device and its documents. One for now (every uploaded record
+ * belongs to it), but modeled as a list and lifted into the top bar so the
+ * scope is explicit and adding a second project later is a data change, not a
+ * UI rebuild.
+ */
+const PROJECTS = [{ id: "northlake-vp400", name: "Northlake VP-400" }];
+
+/**
  * The shell: navigation, the record/run the findings view is showing, and the
  * set of review jobs being watched.
  *
@@ -36,6 +44,7 @@ export function App() {
   // nothing to look at — the first screen shouldn't be a button that spends
   // money. The newest reviewed document is opened automatically below.
   const [page, setPage] = useState<Page>("findings");
+  const [project, setProject] = useState(PROJECTS[0]!.id);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [record, setRecord] = useState<RecordDetail | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -286,6 +295,20 @@ export function App() {
           RegReview
           <span className="tagline">pre-inspection review</span>
         </div>
+
+        {/* Project scope. One project for now — every document belongs to it —
+            but it sits in the top bar so it governs every page as more are
+            added: the file tree, the map, the ledger all read from here. */}
+        <label className="project-picker" title="Project — the device and its documents">
+          <span className="project-label">Project</span>
+          <select value={project} onChange={(e) => setProject(e.target.value)}>
+            {PROJECTS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <nav className="viewnav">
           <button

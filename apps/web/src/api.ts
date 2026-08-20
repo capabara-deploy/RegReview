@@ -324,6 +324,23 @@ export const api = {
     return (await res.json()) as UploadResult;
   },
 
+  /** Replace a document's file in place, keeping its record identity. */
+  replaceRecord: async (recordId: string, file: File): Promise<UploadResult> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API_URL}/api/records/${recordId}/replace`, {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    });
+    if (res.status === 401) throw new AuthError();
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as UploadResult;
+  },
+
   startReview: (
     recordId: string,
     opts: { related?: string[]; samples?: number; offline?: boolean; ruleIds?: string[] },

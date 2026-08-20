@@ -1656,3 +1656,31 @@ button.secondary { background: transparent; }
 .rc-subgroup-toggle:hover { color: var(--accent, #2b6cb0); }
 .rc-chevron { width: 0.9em; display: inline-block; color: var(--muted, #889); }
 .rc-subgroup-rules { padding-left: 1.3rem; }
+
+/* --- Top-bar project picker --- */
+.project-picker { display: flex; align-items: center; gap: 0.4rem; margin: 0 1rem; }
+.project-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #8a93a3); }
+.project-picker select { padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--border, #d3d7de);
+  font-weight: 600; background: var(--panel, #f6f7f9); }
+
+/* --- Documents grouped by type --- */
+.doctype-group { border-top: 1px solid var(--border, #eef); }
+.doctype-group:first-child { border-top: none; }
+.doctype-head { display: flex; align-items: center; }
+.doctype-toggle { flex: 1; display: flex; align-items: center; gap: 0.45rem; background: none; border: none;
+  cursor: pointer; text-align: left; font-size: 0.9rem; font-weight: 600; color: var(--text, #223);
+  padding: 0.45rem 0.2rem; }
+.doctype-toggle:hover { color: var(--accent, #2b6cb0); }
+.docrow-replace { background: none; border: none; cursor: pointer; color: var(--muted, #8a93a3);
+  font-size: 1rem; padding: 0 0.3rem; line-height: 1; }
+.docrow-replace:hover:not(:disabled) { color: var(--accent, #2b6cb0); }
+.docrow-replace:disabled { opacity: 0.4; cursor: default; }
+
+/* --- Cross-check compare-all/none --- */
+.cross-controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.seg { display: inline-flex; border: 1px solid var(--border, #cfd4dc); border-radius: 7px; overflow: hidden; }
+.seg-btn { background: var(--panel, #f6f7f9); border: none; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.85rem;
+  border-right: 1px solid var(--border, #cfd4dc); }
+.seg-btn:last-child { border-right: none; }
+.seg-btn.on { background: var(--accent, #2b6cb0); color: #fff; font-weight: 600; }
+.cross-targets { margin-top: 0.4rem; }
