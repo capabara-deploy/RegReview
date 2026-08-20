@@ -12,6 +12,7 @@ import {
   type Stage,
   type Submission,
   type SubmissionKind,
+  type SubmissionStatus,
 } from "./api";
 
 /**
@@ -50,10 +51,49 @@ const CHANGE_TYPES: ChangeType[] = [
   "other",
 ];
 
+/**
+ * Display labels for every enum this surface renders.
+ *
+ * These exist so nothing is shown by munging an enum value at the call site.
+ * `changeType.replace(/_/g, " ")` produces "risk_control" → "risk control" in
+ * one place and an uppercased variant in another, and the two drift apart the
+ * moment a value is added. One map per enum, sentence case throughout.
+ */
 const DETERMINATION_LABEL: Record<Determination, string> = {
   undecided: "Undecided",
   letter_to_file: "Letter to file",
   new_submission: "New submission",
+};
+
+const CHANGE_TYPE_LABEL: Record<ChangeType, string> = {
+  software: "Software",
+  labeling: "Labeling",
+  material: "Material",
+  component: "Component",
+  geometry: "Geometry",
+  performance_spec: "Performance spec",
+  risk_control: "Risk control",
+  manufacturing_process: "Manufacturing process",
+  other: "Other",
+};
+
+const STAGE_LABEL: Record<Stage, string> = {
+  proposed: "Proposed",
+  implemented: "In product",
+  documented: "Documented",
+  in_submission: "On a submission",
+  cleared: "Cleared",
+  superseded: "Superseded",
+};
+
+const SUBMISSION_STATUS_LABEL: Record<SubmissionStatus, string> = {
+  planned: "Planned",
+  filed: "Filed",
+  // "Additional information request" is the FDA term; the short form is what
+  // regulatory staff actually say, and the full phrase does not fit a status pill.
+  additional_info: "AI request",
+  cleared: "Cleared",
+  withdrawn: "Withdrawn",
 };
 
 const GAP_LABEL: Record<string, string> = {
@@ -68,16 +108,17 @@ const GAP_LABEL: Record<string, string> = {
 /**
  * The board columns, in workflow order.
  *
- * The labels are deliberately the plain-English consequence rather than the
- * enum name: a regulatory lead scanning this should read what state the company
- * is actually in, not the schema.
+ * Headings come from STAGE_LABEL so a column and a status pill for the same
+ * stage can never disagree; the sub-line carries the plain-English consequence,
+ * because a regulatory lead scanning this should read what state the company is
+ * actually in, not the schema.
  */
-const COLUMNS: { stage: Stage; label: string; sub: string; pool: "a" | "b" | null }[] = [
-  { stage: "proposed", label: "Proposed", sub: "Not in the product yet", pool: null },
-  { stage: "implemented", label: "In product", sub: "No controlled document", pool: "a" },
-  { stage: "documented", label: "Documented", sub: "Not on a submission", pool: "b" },
-  { stage: "in_submission", label: "On a submission", sub: "Filed or being prepared", pool: null },
-  { stage: "cleared", label: "Cleared", sub: "Folded into a new baseline", pool: null },
+const COLUMNS: { stage: Stage; sub: string; pool: "a" | "b" | null }[] = [
+  { stage: "proposed", sub: "Not in the product yet", pool: null },
+  { stage: "implemented", sub: "No controlled document", pool: "a" },
+  { stage: "documented", sub: "Not on a submission", pool: "b" },
+  { stage: "in_submission", sub: "Filed or being prepared", pool: null },
+  { stage: "cleared", sub: "Folded into a new baseline", pool: null },
 ];
 
 const SUBMISSION_KINDS: { value: SubmissionKind; label: string }[] = [
@@ -281,6 +322,7 @@ function RiskGauge({
   // exactly the state the reader most needs to judge the size of.
   const scaleMax = Math.max(pools.projected, baseline.threshold * 1.4, 1);
   const pct = (v: number) => `${(v / scaleMax) * 100}%`;
+  const thresholdAt = (baseline.threshold / scaleMax) * 100;
 
   return (
     <div className={`gauge-panel ${escalation.crossed ? "crossed" : ""}`}>
@@ -312,8 +354,13 @@ function RiskGauge({
         <div className="gauge-seg seg-undoc" style={{ width: pct(pools.undocumented) }} />
         <div className="gauge-seg seg-unsub" style={{ width: pct(pools.unsubmitted) }} />
         <div className="gauge-seg seg-pipe" style={{ width: pct(pools.pipeline) }} />
-        <div className="gauge-threshold" style={{ left: pct(baseline.threshold) }}>
-          <span className="gauge-threshold-label">threshold {baseline.threshold}</span>
+        <div
+          // Near the right edge the label would run off the panel, so it flips
+          // to the inside of the marker instead of being clipped.
+          className={`gauge-threshold ${thresholdAt > 80 ? "near-end" : ""}`}
+          style={{ left: `${thresholdAt}%` }}
+        >
+          <span className="gauge-threshold-label">Threshold {baseline.threshold}</span>
         </div>
       </div>
 
@@ -382,7 +429,7 @@ function ThresholdEditor({
         where the number came from.
       </p>
       <div className="threshold-fields">
-        <label>
+        <label className="field">
           Escalate at
           <input
             type="number"
@@ -391,7 +438,7 @@ function ThresholdEditor({
             onChange={(e) => setThreshold(e.target.value)}
           />
         </label>
-        <label className="grow">
+        <label className="field grow">
           Procedure citation
           <input
             placeholder="e.g. QSP-0031 §5.4"
@@ -399,8 +446,8 @@ function ThresholdEditor({
             onChange={(e) => setSource(e.target.value)}
           />
         </label>
-        <button disabled={busy || !threshold} onClick={() => void save()}>
-          Save
+        <button className="primary" disabled={busy || !threshold} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save"}
         </button>
       </div>
     </div>
@@ -435,7 +482,7 @@ function StageBoard({
         return (
           <div key={col.stage} className={`stage-col pool-${col.pool ?? "none"}`}>
             <div className="stage-col-head">
-              <span className="stage-col-label">{col.label}</span>
+              <span className="stage-col-label">{STAGE_LABEL[col.stage]}</span>
               <span className="stage-col-count">
                 {list.length}
                 {col.pool && points > 0 ? ` · ${points} pts` : ""}
@@ -482,7 +529,7 @@ function ChangeCard({
         <span className={`cc-score src-${source}`} title={SCORE_SOURCE_LABEL[source]}>
           {eff?.value ?? "?"}
         </span>
-        <span className="cc-type">{change.changeType.replace(/_/g, " ")}</span>
+        <span className="cc-type">{CHANGE_TYPE_LABEL[change.changeType]}</span>
         {gapCount > 0 && <span className="cc-gaps">{gapCount}</span>}
       </div>
       <div className="cc-proposal">{change.proposal}</div>
@@ -553,7 +600,7 @@ function ChangeDetail({
   return (
     <div className="change-detail">
       <div className="cd-head">
-        <span className="chip cat">{change.changeType.replace(/_/g, " ")}</span>
+        <span className="chip cat">{CHANGE_TYPE_LABEL[change.changeType]}</span>
         {change.subsystem && <span className="cd-sub">{change.subsystem}</span>}
         <span className="cd-date">{change.changedAt ?? change.createdAt.slice(0, 10)}</span>
         <button className="link-btn" onClick={onClose}>
@@ -563,7 +610,7 @@ function ChangeDetail({
 
       <div className="cd-proposal">{change.proposal}</div>
       {change.comparator && (
-        <div className="change-comparator">compared against: {change.comparator}</div>
+        <div className="change-comparator">Compared against {change.comparator}</div>
       )}
 
       {/* --- Scoring --- */}
@@ -705,10 +752,9 @@ function ChangeDetail({
         )}
 
         <div className="cd-determination">
-          <label>
+          <label className="field">
             Regulatory determination
             <select
-              className="determination"
               value={change.determination}
               onChange={(e) =>
                 void run("det", () =>
@@ -880,7 +926,7 @@ function Submissions({
             </label>
           ))}
           <div className="ns-actions">
-            <button disabled={busy || !title || picked.size === 0} onClick={() => void create()}>
+            <button className="primary" disabled={busy || !title || picked.size === 0} onClick={() => void create()}>
               {busy ? "Creating…" : `Create submission (${picked.size} changes, ${pickedPoints} pts)`}
             </button>
           </div>
@@ -923,7 +969,7 @@ function SubmissionRow({
         <span className="sr-title">{submission.title}</span>
         <span className="chip">{SUBMISSION_KINDS.find((k) => k.value === submission.kind)?.label}</span>
         <span className={`sr-status st-${submission.status}`}>
-          {submission.status.replace(/_/g, " ")}
+          {SUBMISSION_STATUS_LABEL[submission.status]}
         </span>
       </div>
       <div className="sr-meta">
@@ -933,7 +979,11 @@ function SubmissionRow({
       </div>
 
       {submission.status === "planned" && (
-        <button disabled={busy} onClick={() => void act(() => api.setSubmissionStatus(submission.submissionId, { status: "filed" }))}>
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() => void act(() => api.setSubmissionStatus(submission.submissionId, { status: "filed" }))}
+        >
           Record as filed
         </button>
       )}
@@ -968,7 +1018,7 @@ function SubmissionRow({
               )
             }
           >
-            AI request received
+            Record AI request
           </button>
         </div>
       )}
@@ -1027,7 +1077,7 @@ function CreateBaseline({
       <input placeholder="Cleared date (optional, YYYY-MM-DD)" value={clearedAt} onChange={(e) => setClearedAt(e.target.value)} />
       <input placeholder="Escalation threshold (your procedure's number)" type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
       <input placeholder="Procedure citation (e.g. QSP-0031 §5.4)" value={thresholdSource} onChange={(e) => setThresholdSource(e.target.value)} />
-      <button disabled={!device || !clearanceId} onClick={() => void submit()}>
+      <button className="primary" disabled={!device || !clearanceId} onClick={() => void submit()}>
         Create baseline
       </button>
     </div>
@@ -1094,7 +1144,7 @@ function AddChange({
         <select value={changeType} onChange={(e) => setChangeType(e.target.value as ChangeType)}>
           {CHANGE_TYPES.map((t) => (
             <option key={t} value={t}>
-              {t.replace(/_/g, " ")}
+              {CHANGE_TYPE_LABEL[t]}
             </option>
           ))}
         </select>
@@ -1109,7 +1159,7 @@ function AddChange({
         <input placeholder="Date (YYYY-MM-DD)" value={changedAt} onChange={(e) => setChangedAt(e.target.value)} />
       </div>
       <div className="add-change-actions">
-        <button disabled={!proposal} onClick={() => void submit()}>
+        <button className="primary" disabled={!proposal} onClick={() => void submit()}>
           Add change
         </button>
         <button className="secondary" onClick={() => setOpen(false)}>

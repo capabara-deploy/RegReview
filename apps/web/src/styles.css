@@ -1600,204 +1600,952 @@ body {
   }
 }
 
-/* --- Cumulative change ledger ---
+/* ---------- cumulative change ledger ---------- *
  *
- * The board is wider than the reading surfaces elsewhere in the app because it
- * is a status display, not a document: five columns that must be comparable in
- * one glance, rather than a measure tuned for prose.
+ * Three house rules this section follows, all of them set elsewhere in this file:
  *
- * Per the colour rule at the top of this file, nothing here is distinguished by
- * hue alone. The two risk pools differ in fill pattern as well as colour, the
- * pipeline segment is hatched, and every score chip carries a provenance glyph
- * (see .cc-score) so a confirmed score and a guessed one remain distinguishable
- * in greyscale.
+ *  1. Sizes are px on the same scale as the rest of the app — 11 (micro label),
+ *     12 (meta), 12.5 (controls and dense body), 13 (body), 15 (headings).
+ *     Not rem: the app's base is 15px and mixing units made this tab's text
+ *     land between every other tab's.
+ *  2. Nothing is distinguished by colour alone. The two risk pools differ in
+ *     fill pattern as well as hue, the pipeline segment is hatched, and every
+ *     score chip carries a provenance glyph, so the gauge survives greyscale.
+ *  3. Controls match `.upload-btn` (outline) and `.login-card button` (filled),
+ *     which are the two button shapes the rest of the app already uses.
+ *
+ * The board is wider than the reading surfaces elsewhere because it is a status
+ * display, not a document: five columns that must be comparable at a glance.
  */
-.ledger { padding: 1rem 1.25rem; max-width: 1180px; margin: 0 auto; }
-.ledger-bar { margin-bottom: 1rem; }
-.ledger-bar select, .determination, .add-change select { padding: 0.4rem; border-radius: 6px; }
-.link-btn { background: none; border: none; color: var(--accent); cursor: pointer;
-  padding: 0.2rem 0; font-size: 0.85rem; text-decoration: underline; }
-.grow { flex: 1; }
 
-/* --- The gauge --- */
-.gauge-panel { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem;
-  background: var(--surface); margin-bottom: 1.25rem; }
-.gauge-panel.crossed { border-color: var(--high-line); border-width: 2px; }
-.gauge-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
-.gauge-headline { display: flex; align-items: baseline; gap: 0.45rem; flex-wrap: wrap; }
-.gauge-value { font-size: 2.4rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-.gauge-panel.crossed .gauge-value { color: var(--high-line); }
-.gauge-of { font-size: 1.1rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.gauge-caption { font-size: 0.85rem; color: var(--muted); }
+.ledger {
+  padding: 18px 24px;
+  max-width: 1180px;
+  margin: 0 auto;
+  font-size: 13px;
+}
 
-.gauge-track { position: relative; height: 26px; margin: 0.9rem 0 0.5rem;
-  background: #ececE6; border-radius: 4px; display: flex; overflow: visible; }
-.gauge-seg { height: 100%; transition: width 160ms ease; }
-.gauge-seg:first-child { border-radius: 4px 0 0 4px; }
+.ledger h3 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.ledger h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+.ledger p {
+  margin: 0 0 8px;
+}
+
+.ledger .muted {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* --- controls: one shape for every button, input and select in this tab --- */
+
+/* `.change-card` is a button for keyboard access but reads as a card, so it is
+   excluded here and styled on its own further down. */
+.ledger button:not(.change-card):not(.link-btn) {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ledger button:not(.change-card):not(.link-btn):hover:not(:disabled) {
+  background: #eef2f7;
+}
+
+.ledger button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.ledger button.primary:hover:not(:disabled) {
+  background: #24506f;
+}
+
+.ledger button.secondary {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.ledger button.secondary:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+  background: var(--surface);
+}
+
+.ledger button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ledger .link-btn {
+  font: inherit;
+  font-size: 12.5px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.ledger input,
+.ledger select,
+.ledger textarea {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  max-width: 100%;
+}
+
+.ledger textarea {
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ledger input:focus-visible,
+.ledger select:focus-visible,
+.ledger textarea:focus-visible,
+.ledger button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Field labels stacked over their control — the pattern used by the threshold
+   editor and the determination picker. */
+.ledger .field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.ledger-bar {
+  margin-bottom: 14px;
+}
+
+.ledger-bar select {
+  font-size: 13px;
+  max-width: 100%;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- the gauge --- */
+
+.gauge-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--surface);
+  margin-bottom: 18px;
+}
+
+.gauge-panel.crossed {
+  border-color: var(--high-line);
+  box-shadow: inset 3px 0 0 var(--high-line);
+}
+
+.gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.gauge-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.gauge-value {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge-panel.crossed .gauge-value {
+  color: var(--high-line);
+}
+
+.gauge-of {
+  font-size: 15px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge-caption {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The threshold marker needs room above the track for its label, hence the
+   top margin rather than padding on the panel. */
+.gauge-track {
+  position: relative;
+  height: 24px;
+  margin: 26px 0 10px;
+  background: #ececE6;
+  border-radius: 4px;
+  display: flex;
+}
+
+.gauge-seg {
+  height: 100%;
+  transition: width 160ms ease;
+}
+
+.gauge-seg:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
 /* Pool A — in the product, undocumented. Solid, and the heavier of the two:
    this is the pool that shows up in an inspection. */
-.seg-undoc { background: #c0392b; }
+.seg-undoc {
+  background: #c0392b;
+}
+
 /* Pool B — documented, awaiting a filing decision. Managed, not hidden, so it
-   reads as a lighter tone with a stripe to keep it distinct without colour. */
-.seg-unsub { background: repeating-linear-gradient(90deg, #4a6fa5, #4a6fa5 7px, #5b7fb5 7px, #5b7fb5 9px); }
+   reads as a lighter tone with a stripe to stay distinct without colour. */
+.seg-unsub {
+  background: repeating-linear-gradient(90deg, #4a6fa5, #4a6fa5 7px, #5b7fb5 7px, #5b7fb5 9px);
+}
+
 /* Pipeline — not exposure yet. Hatched and pale: visibly provisional. */
-.seg-pipe { background: repeating-linear-gradient(45deg, #cfcfc7, #cfcfc7 4px, #e6e6e0 4px, #e6e6e0 8px); }
-.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px;
-  vertical-align: -1px; margin-right: 0.35rem; }
+.seg-pipe {
+  background: repeating-linear-gradient(45deg, #cfcfc7, #cfcfc7 4px, #e6e6e0 4px, #e6e6e0 8px);
+}
 
-.gauge-threshold { position: absolute; top: -4px; bottom: -4px; width: 0;
-  border-left: 2px dashed var(--text); }
-.gauge-threshold-label { position: absolute; top: -1.15rem; left: 4px; white-space: nowrap;
-  font-size: 0.72rem; color: var(--text); font-variant-numeric: tabular-nums; }
-.gauge-legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.82rem;
-  color: var(--muted); margin-bottom: 0.75rem; }
-.gauge-message { font-size: 0.9rem; line-height: 1.45; padding: 0.6rem 0.8rem;
-  border-radius: 6px; background: var(--bg); border-left: 3px solid var(--border); }
-.gauge-message.crossed { background: var(--high-bg); border-left-color: var(--high-line); font-weight: 500; }
-.gauge-message.crossed::before { content: "! "; font-weight: 700; }
-.gauge-unconfirmed { margin-top: 0.5rem; font-size: 0.82rem; color: var(--muted);
-  padding-left: 0.8rem; border-left: 3px dotted var(--med-line); }
+.swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  margin-right: 5px;
+}
 
-.threshold-editor { margin: 0.75rem 0; padding: 0.75rem 0.9rem; background: var(--bg);
-  border-radius: 8px; }
-.threshold-editor p { margin: 0 0 0.6rem; font-size: 0.85rem; }
-.threshold-fields { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; }
-.threshold-fields label { display: flex; flex-direction: column; gap: 0.2rem;
-  font-size: 0.78rem; color: var(--muted); }
-.threshold-fields input { padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); }
-.threshold-fields input[type="number"] { width: 6rem; }
+.gauge-threshold {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 0;
+  border-left: 2px dashed var(--text);
+}
 
-/* --- The stage board --- */
-.stage-board { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem;
-  margin-bottom: 1.25rem; align-items: start; }
-.stage-col { background: var(--bg); border-radius: 8px; padding: 0.6rem 0.5rem;
-  border-top: 3px solid var(--border); min-width: 0; }
+.gauge-threshold-label {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 4px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Past ~80% of the track the label would run off the right edge, so it flips
+   to the inside of the marker. */
+.gauge-threshold.near-end .gauge-threshold-label {
+  left: auto;
+  right: 4px;
+}
+
+.gauge-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.legend-item {
+  white-space: nowrap;
+}
+
+.gauge-message {
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 9px 11px;
+  border-radius: 5px;
+  background: var(--bg);
+  border-left: 3px solid var(--border);
+  text-wrap: pretty;
+}
+
+.gauge-message.crossed {
+  background: var(--high-bg);
+  border-left-color: var(--high-line);
+}
+
+.gauge-message.crossed::before {
+  content: "! ";
+  font-weight: 700;
+}
+
+.gauge-unconfirmed {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  padding-left: 11px;
+  border-left: 3px dotted var(--med-line);
+  text-wrap: pretty;
+}
+
+.threshold-editor {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.threshold-fields {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.threshold-fields input[type="number"] {
+  width: 84px;
+}
+
+/* --- the stage board --- */
+
+.stage-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+  align-items: start;
+}
+
+.stage-col {
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 9px 8px;
+  border-top: 3px solid var(--border);
+  min-width: 0;
+}
+
 /* The two columns that make up exposure are marked at the top edge, matching
    the gauge segments, so the board and the gauge read as one object. */
-.stage-col.pool-a { border-top-color: #c0392b; }
-.stage-col.pool-b { border-top-color: #4a6fa5; }
-.stage-col-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.4rem; }
-.stage-col-label { font-weight: 600; font-size: 0.85rem; }
-.stage-col-count { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums;
-  white-space: nowrap; }
-.stage-col-sub { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.5rem; }
-.stage-col-body { display: flex; flex-direction: column; gap: 0.4rem; }
-.stage-empty { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 0.5rem 0; }
+.stage-col.pool-a {
+  border-top-color: #c0392b;
+}
 
-.change-card { display: block; width: 100%; text-align: left; cursor: pointer;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-  padding: 0.5rem; font: inherit; }
-.change-card:hover { border-color: var(--accent); }
-.change-card.open { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(45, 95, 138, 0.18); }
-.cc-top { display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.3rem; }
-.cc-type { font-size: 0.7rem; color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-gaps { margin-left: auto; font-size: 0.7rem; font-weight: 700; color: var(--med-line);
-  background: var(--med-bg); border-radius: 999px; padding: 0 0.35rem; }
-.cc-gaps::after { content: " ▲"; }
-.cc-proposal { font-size: 0.78rem; line-height: 1.35; display: -webkit-box;
-  -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.cc-foot { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.35rem; }
-.cc-sub { font-size: 0.7rem; color: var(--muted); }
-.cc-age { font-size: 0.7rem; color: var(--muted); }
-.cc-age.hot { color: var(--high-line); font-weight: 600; }
-.cc-age.hot::before { content: "⏱ "; }
+.stage-col.pool-b {
+  border-top-color: #4a6fa5;
+}
+
+.stage-col-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.stage-col-label {
+  font-weight: 600;
+  font-size: 12.5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stage-col-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stage-col-sub {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  margin-bottom: 8px;
+  text-wrap: pretty;
+}
+
+.stage-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stage-empty {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.change-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+  min-width: 0;
+}
+
+.change-card:hover {
+  border-color: var(--accent);
+}
+
+.change-card.open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(45, 95, 138, 0.18);
+}
+
+.cc-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 5px;
+  min-width: 0;
+}
+
+.cc-type {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cc-gaps {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--med-line);
+  background: var(--med-bg);
+  border-radius: 999px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.cc-gaps::after {
+  content: " \25B2";
+}
+
+/* Document ids and version strings ("DCO-2023-0044", "v3.1.4") are long
+   unbroken tokens that would otherwise push the card wider than its column. */
+.cc-proposal {
+  font-size: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.cc-foot {
+  display: flex;
+  gap: 4px 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.cc-sub,
+.cc-age {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-age {
+  white-space: nowrap;
+}
+
+.cc-age.hot {
+  color: var(--high-line);
+  font-weight: 600;
+}
+
+.cc-age.hot::before {
+  content: "\23F1 ";
+}
 
 /* Score chips. The glyph after the number is the provenance, so the difference
    between a confirmed score and a model's guess survives greyscale printing —
    which is how these get taken into a review meeting. */
-.cc-score { font-weight: 700; font-size: 0.8rem; font-variant-numeric: tabular-nums;
-  min-width: 1.9rem; text-align: center; border-radius: 4px; padding: 0.05rem 0.25rem;
-  background: var(--surface); }
-.cc-score.src-confirmed { border: 2px solid var(--text); }
-.cc-score.src-confirmed_below_floor { border: 2px solid var(--text); }
-.cc-score.src-confirmed_below_floor::after { content: "±"; font-size: 0.7rem; }
-.cc-score.src-suggested { border: 2px dashed var(--med-line); color: var(--med-line); }
-.cc-score.src-suggested::after { content: "~"; font-size: 0.7rem; }
-.cc-score.src-floor { border: 2px dotted var(--muted); color: var(--muted); }
-.cc-score.src-floor::after { content: "·"; font-size: 0.7rem; }
+.cc-score {
+  font-weight: 700;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 26px;
+  text-align: center;
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: var(--surface);
+  white-space: nowrap;
+  flex: none;
+}
 
-/* --- The detail panel --- */
-.change-detail { border: 1px solid var(--accent); border-radius: 10px; padding: 1rem 1.1rem;
-  background: var(--surface); margin-bottom: 1.25rem; }
-.cd-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.cd-head .link-btn { margin-left: auto; }
-.cd-sub, .cd-date { font-size: 0.82rem; color: var(--muted); }
-.cd-proposal { margin: 0.6rem 0 0.3rem; line-height: 1.5; }
-.cd-section { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
-.cd-section h4 { margin: 0 0 0.5rem; font-size: 0.85rem; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--muted); }
-.cd-score-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-.cd-score-row input { width: 4.5rem; padding: 0.4rem; border-radius: 6px;
-  border: 1px solid var(--border); font-size: 1rem; font-weight: 700; text-align: center; }
-.cd-src { font-size: 0.78rem; padding: 0.15rem 0.4rem; border-radius: 4px; }
-.cd-src.src-suggested { color: var(--med-line); background: var(--med-bg); }
-.cd-src.src-floor { color: var(--muted); background: var(--bg); }
-.cd-floor { margin-top: 0.5rem; font-size: 0.82rem; color: var(--muted); line-height: 1.45; }
-.cd-below-floor { margin-top: 0.6rem; padding: 0.6rem 0.75rem; background: var(--med-bg);
-  border-left: 3px solid var(--med-line); border-radius: 4px; font-size: 0.84rem; line-height: 1.45; }
-.cd-below-floor textarea { width: 100%; margin-top: 0.4rem; padding: 0.45rem;
-  border-radius: 6px; border: 1px solid var(--border); font: inherit; }
-.cd-suggestion { margin-top: 0.7rem; padding: 0.6rem 0.75rem; background: var(--bg);
-  border-left: 3px dashed var(--med-line); border-radius: 4px; }
-.cd-suggestion-head { font-size: 0.85rem; }
-.cd-suggestion-body { margin-top: 0.35rem; font-size: 0.84rem; line-height: 1.5; white-space: pre-wrap; }
-.cd-suggestion-note { margin-top: 0.45rem; font-size: 0.76rem; line-height: 1.4; }
-.cd-document-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.cd-document-row select { flex: 1; min-width: 14rem; padding: 0.4rem; border-radius: 6px; }
-.cd-determination { margin-top: 0.8rem; }
-.cd-determination label { display: flex; flex-direction: column; gap: 0.25rem;
-  font-size: 0.78rem; color: var(--muted); max-width: 16rem; }
+.cc-score.src-confirmed,
+.cc-score.src-confirmed_below_floor {
+  border: 2px solid var(--text);
+}
 
-/* --- Submissions --- */
-.submissions { border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1.1rem;
-  background: var(--surface); margin-bottom: 1.25rem; }
-.submissions-head { display: flex; align-items: baseline; justify-content: space-between; }
-.submissions-head h3 { margin: 0; font-size: 1rem; }
-.submission-row { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.85rem;
-  margin: 0.6rem 0; }
-.submission-row.st-cleared { border-left: 3px solid #2e7d5b; }
-.submission-row.st-filed { border-left: 3px solid var(--accent); }
-.sr-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.sr-title { font-weight: 600; }
-.sr-status { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em;
-  padding: 0.1rem 0.4rem; border-radius: 4px; background: var(--bg); color: var(--muted); }
-.sr-status.st-cleared { background: #e2f0e9; color: #2e7d5b; }
-.sr-status.st-filed { background: var(--low-bg); color: var(--low-line); }
-.sr-meta { font-size: 0.8rem; color: var(--muted); margin: 0.3rem 0 0.5rem; }
-.sr-clear { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.sr-clear input { flex: 1; min-width: 16rem; padding: 0.4rem; border-radius: 6px;
-  border: 1px solid var(--border); }
-.new-submission { border-top: 1px solid var(--border); margin-top: 0.7rem; padding-top: 0.7rem; }
-.ns-fields { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
-.ns-fields input { padding: 0.45rem; border-radius: 6px; border: 1px solid var(--border); min-width: 14rem; }
-.ns-change { display: flex; gap: 0.5rem; align-items: center; padding: 0.35rem 0;
-  font-size: 0.85rem; cursor: pointer; }
-.ns-actions { margin-top: 0.6rem; }
+.cc-score.src-confirmed_below_floor::after {
+  content: "\00B1";
+  font-size: 10px;
+}
 
-.cluster-hot { background: #fde8e8; border-color: #f5b5b5; font-weight: 600; }
-.gap-row { display: flex; gap: 0.6rem; padding: 0.5rem 0.75rem; background: #fff6e5; border-left: 3px solid #e0a020;
-  border-radius: 4px; margin: 0.3rem 0; font-size: 0.9rem; }
-.gap-aggregate { background: #fdeaea; border-left-color: #cc2b2b; }
-.gap-kind { font-weight: 700; white-space: nowrap; }
-.change-comparator { font-size: 0.82rem; color: var(--muted, #667); }
-.branch-row { font-size: 0.85rem; padding: 0.25rem 0 0.25rem 0.75rem; color: var(--muted, #445); }
-.ledger-disclaimer { margin: 1rem 0; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--bg); }
+.cc-score.src-suggested {
+  border: 2px dashed var(--med-line);
+  color: var(--med-line);
+}
+
+.cc-score.src-suggested::after {
+  content: "~";
+  font-size: 10px;
+}
+
+.cc-score.src-floor {
+  border: 2px dotted var(--muted);
+  color: var(--muted);
+}
+
+.cc-score.src-floor::after {
+  content: "\00B7";
+  font-size: 10px;
+}
+
+/* --- the detail panel --- */
+
+.change-detail {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--surface);
+  margin-bottom: 18px;
+}
+
+.cd-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cd-head .link-btn {
+  margin-left: auto;
+}
+
+.cd-sub,
+.cd-date {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cd-proposal {
+  margin: 9px 0 4px;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.cd-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.cd-score-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cd-score-row input {
+  width: 64px;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.cd-src {
+  font-size: 12px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.cd-src.src-suggested {
+  color: var(--med-line);
+  background: var(--med-bg);
+}
+
+.cd-src.src-floor {
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.cd-floor {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.cd-below-floor {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--med-bg);
+  border-left: 3px solid var(--med-line);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.cd-below-floor label {
+  display: block;
+}
+
+.cd-below-floor textarea {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.cd-suggestion {
+  margin-top: 11px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-left: 3px dashed var(--med-line);
+  border-radius: 4px;
+}
+
+.cd-suggestion-head {
+  font-size: 12.5px;
+}
+
+/* The model returns its unknowns as a bulleted block, so newlines are content. */
+.cd-suggestion-body {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cd-suggestion-note {
+  margin-top: 7px;
+  font-size: 11px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.cd-document-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cd-document-row select {
+  flex: 1;
+  min-width: 220px;
+}
+
+.cd-determination {
+  margin-top: 12px;
+  max-width: 240px;
+}
+
+/* --- submissions --- */
+
+.submissions {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--surface);
+  margin-bottom: 18px;
+}
+
+.submissions-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.submission-row {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.submission-row.st-cleared {
+  border-left: 3px solid #2e7d5b;
+}
+
+.submission-row.st-filed {
+  border-left: 3px solid var(--accent);
+}
+
+.sr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sr-title {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sr-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sr-status.st-cleared {
+  background: #e2f0e9;
+  color: #2e7d5b;
+}
+
+.sr-status.st-filed {
+  background: var(--low-bg);
+  color: var(--low-line);
+}
+
+.sr-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 5px 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.sr-clear {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sr-clear input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.new-submission {
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.ns-fields {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.ns-fields input {
+  min-width: 220px;
+}
+
+.ns-change {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.ns-change input[type="checkbox"] {
+  flex: none;
+  padding: 0;
+}
+
+.ns-actions {
+  margin-top: 10px;
+}
+
+/* --- gaps, branches, forms --- */
+
+.cluster-hot {
+  background: #fde8e8;
+  border-color: #f5b5b5;
+  font-weight: 600;
+}
+
+.gap-row {
+  display: flex;
+  gap: 9px;
+  padding: 8px 11px;
+  background: #fff6e5;
+  border-left: 3px solid #e0a020;
+  border-radius: 4px;
+  margin: 5px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.gap-aggregate {
+  background: #fdeaea;
+  border-left-color: #cc2b2b;
+}
+
+.gap-kind {
+  font-weight: 700;
+  white-space: nowrap;
+  flex: none;
+}
+
+.change-comparator {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.branch-row {
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 5px 0 5px 11px;
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+.branch-row code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ledger-disclaimer {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: 5px;
+  background: var(--bg);
+  text-wrap: pretty;
+}
+
+.add-change,
+.create-baseline {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+
+.create-baseline h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+
+.add-change textarea,
+.create-baseline input {
+  width: 100%;
+  margin: 4px 0;
+}
+
+.add-change-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.add-change-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.add-change-btn {
+  margin-top: 14px;
+}
+
+button.secondary {
+  background: transparent;
+}
 
 /* The board needs its five columns; below that it stacks rather than crushing
    the cards into unreadable slivers. */
 @media (max-width: 1000px) {
-  .stage-board { grid-template-columns: repeat(2, 1fr); }
+  .stage-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
+
 @media (max-width: 600px) {
-  .stage-board { grid-template-columns: 1fr; }
+  .stage-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ledger {
+    padding: 14px 12px;
+  }
 }
-.add-change, .create-baseline { border: 1px dashed var(--border, #ccd); border-radius: 8px; padding: 1rem; margin-top: 1rem; }
-.add-change textarea, .create-baseline input { width: 100%; padding: 0.5rem; margin: 0.3rem 0; border-radius: 6px; box-sizing: border-box; }
-.add-change-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin: 0.4rem 0; }
-.add-change-actions { display: flex; gap: 0.5rem; }
-.add-change-btn { margin-top: 1rem; }
-button.secondary { background: transparent; }
 
 /* --- Cross-document map --- */
 .graphmap { display: flex; flex-direction: column; height: calc(100vh - 60px); }
