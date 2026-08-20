@@ -489,18 +489,28 @@ body {
   margin: 8px 0 0;
 }
 
-/* The document list reads as a table of rows, not a stack of boxes.
+/* Each document is a card, on a recessed track.
  *
- * It used to be grey bordered rows on the white `.rp-section` card — the house
- * idiom inverted (`.sop-item` is a white item on a grey sidebar), which made a
- * six-document list look like six competing panels. Rows now sit directly on
- * the card, separated by hairlines, and carry a left accent bar when selected —
- * the same selection cue `.sop-item` uses, so the two lists in the app read the
- * same way.
+ * This started as grey bordered rows on the white `.rp-section` card — the
+ * house idiom inverted, which made every row read as a competing panel. The
+ * first fix went too far the other way: hairline-separated rows on white were
+ * calm but the files stopped being individually legible, especially once the
+ * type labels went quiet.
+ *
+ * So: the same arrangement `.sop-item` uses, which is the one that works —
+ * white cards on a grey ground. The track gives the cards something to sit on,
+ * the border and radius make each file a discrete object, and selection is an
+ * inset accent bar plus a tint. Inset rather than a left border, so a uniform
+ * 1px border stays uniform and selecting a row cannot shift its contents.
  */
 .doclist {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
 }
 
 /* Wraps rather than crushes. The type dropdown and run count are fixed-width
@@ -514,26 +524,22 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  /* The transparent left border is the resting state of the selection bar, so
-     selecting a row cannot shift its contents sideways. */
-  border-left: 3px solid transparent;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  padding: 7px 8px 7px 9px;
-  background: transparent;
-}
-
-.docrow:last-child {
-  border-bottom: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
 }
 
 .docrow:hover {
-  background: var(--bg);
+  border-color: var(--muted);
 }
 
 .docrow.on {
-  background: var(--low-bg);
-  border-left-color: var(--accent);
+  border-color: var(--accent);
+  background: #eef2f7;
+  /* Inset, not a border: keeps the 1px border uniform so the row's contents
+     stay put when it is selected. */
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .docrow-main {
@@ -2774,16 +2780,22 @@ button.secondary {
 
 /* --- Documents grouped by type --- */
 
-.doctype-group + .doctype-group {
-  margin-top: 10px;
+/* Groups hold their own cards, so the gap lives here rather than on .doclist. */
+.doctype-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-/* A quiet section rule above each type, so the groups read as headings over
-   their rows rather than as more boxes in the stack. */
+.doctype-group + .doctype-group {
+  margin-top: 14px;
+}
+
+/* A label over its cards, not a divider between them — the cards already
+   separate themselves now. */
 .doctype-head {
   display: flex;
   align-items: center;
-  border-bottom: 1px solid var(--border);
 }
 
 /* Shared shape for the two icon actions on a document row.
