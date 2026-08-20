@@ -495,8 +495,15 @@ body {
   gap: 3px;
 }
 
+/* Wraps rather than crushes. The type dropdown and run count are fixed-width
+   columns, so on a narrow row they ate everything and `.docrow-main`'s
+   min-width:0 let the filename shrink to literally zero — the row still fitted,
+   with the one thing that identifies it invisible. Wrapping puts the name on
+   its own line instead. No media query: the doclist can be narrow on a wide
+   screen too, and this responds to the width it actually has. */
 .docrow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   border: 1px solid var(--border);
@@ -516,9 +523,11 @@ body {
   gap: 10px;
   flex: 1;
   cursor: pointer;
-  /* Without min-width:0 a flex item refuses to shrink below its content, so a
-     long filename pushed the row wide and collapsed the name to zero width. */
-  min-width: 0;
+  /* A floor, not zero. min-width:0 is what lets a long filename ellipsize
+     instead of pushing the row wide, but with fixed columns beside it that same
+     rule let the name shrink away entirely. This is the width below which the
+     row wraps instead. */
+  min-width: 170px;
 }
 
 .docrow-name {
@@ -540,8 +549,10 @@ body {
   padding: 2px 6px;
   white-space: nowrap;
   cursor: pointer;
-  flex: none;
-  max-width: 160px;
+  /* Fixed rather than max-width: a document whose type is not in RECORD_TYPES
+     gets an extra prepended option, which would otherwise widen that one row's
+     dropdown and shift its column out of line with the rest. */
+  flex: 0 0 132px;
 }
 
 .docrow-type:hover {
@@ -579,28 +590,20 @@ body {
   color: var(--muted);
 }
 
+/* A fixed column, right-aligned, so the run count does not set its own width.
+   It was auto-sized with margin-left:auto, and because `.docrow-main` is flex:1
+   there is never spare space for that auto margin to absorb — so the width of
+   this text ("never reviewed" vs "3 runs") pushed everything before it. The
+   type dropdown's left edge wandered 48px between rows, which is what made the
+   list look ragged. Fixed width here pins the dropdown column for every row. */
 .docrow-runs {
+  flex: 0 0 92px;
+  text-align: right;
   font-size: 11px;
   color: var(--muted);
-  margin-left: auto;
   white-space: nowrap;
-}
-
-.docrow-del {
-  font: inherit;
-  font-size: 16px;
-  line-height: 1;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-radius: 4px;
-  padding: 2px 7px;
-  cursor: pointer;
-}
-
-.docrow-del:hover {
-  color: var(--high-line);
-  background: var(--high-bg);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rp-go {
@@ -825,7 +828,7 @@ body {
 }
 
 .rc-warn {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--high-line);
   font-weight: 600;
 }
@@ -872,12 +875,27 @@ body {
   cursor: pointer;
 }
 
+/* Checkboxes carry a browser-default margin (~3px), so every `gap` in this
+   view was really gap + that margin, and the amount differed per engine. Zero
+   it and let the flex gap be the whole truth. */
+.runpage input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+}
+
 .rc-rule {
   display: flex;
   align-items: flex-start;
   gap: 7px;
   padding: 3px 0;
   cursor: pointer;
+}
+
+/* A rule title can wrap to two lines, so the row aligns to flex-start. That
+   puts the box at the top of the whole block; this nudges it onto the first
+   line's optical centre instead, which is where the eye expects it. */
+.rc-rule input[type="checkbox"] {
+  margin-top: 2px;
 }
 
 .rc-rule.off {
@@ -892,7 +910,7 @@ body {
 
 /* A group with nothing applicable still renders, with the reason stated. */
 .rc-blocked {
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--med-line);
   background: var(--med-bg);
@@ -924,6 +942,9 @@ body {
 
 .rc-skip-pass {
   font-weight: 700;
+  /* The pass names are lowercase engine identifiers ("conformance"); shown to a
+     reviewer they should read like the rest of the labels on this screen. */
+  text-transform: capitalize;
 }
 
 .rc-rule-body {
@@ -2603,42 +2624,194 @@ button.secondary {
 .gm-edges li { padding: 0.35rem 0; border-bottom: 1px solid var(--border, #eef); }
 .gm-kind { font-weight: 600; color: #2b6cb0; }
 
-/* --- Run-review rule selector: search + topic sub-groups --- */
-.rc-rule-search { width: 100%; padding: 0.45rem 0.6rem; margin-bottom: 0.6rem; border: 1px solid var(--border, #d3d7de);
-  border-radius: 6px; box-sizing: border-box; font-size: 0.9rem; }
-.rc-subgroup { border-top: 1px solid var(--border, #eef); }
-.rc-subgroup:first-child { border-top: none; }
-.rc-subgroup-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.15rem 0; }
-.rc-subgroup-toggle { flex: 1; display: flex; align-items: center; gap: 0.45rem; background: none; border: none;
-  cursor: pointer; text-align: left; font-size: 0.86rem; font-weight: 600; color: var(--text, #223); padding: 0.3rem 0.2rem; }
-.rc-subgroup-toggle:hover { color: var(--accent, #2b6cb0); }
-.rc-chevron { width: 0.9em; display: inline-block; color: var(--muted, #889); }
-.rc-subgroup-rules { padding-left: 1.3rem; }
+/* --- Run a review: rule selector, document groups, cross-check ---
+ *
+ * These arrived later than the rest of the run-review styles and were written
+ * against different conventions: rem units against a px stylesheet, and
+ * `var(--panel, …)` — a variable this file never defines, so it was silently
+ * painting a fallback grey rather than a theme colour. Both are corrected here.
+ *
+ * Sizes are on the same scale as everything else: 10.5 mini, 11 micro-label,
+ * 12 meta, 12.5 control, 13 body. The rem values produced 13.6 / 13.76 / 14.4px,
+ * three sizes that existed nowhere else in the app.
+ *
+ * Two pairs of buttons share a role and must therefore share a shape: the two
+ * collapsible group headers (.doctype-toggle, .rc-subgroup-toggle) and the two
+ * icon actions on a document row (.docrow-replace, .docrow-del).
+ */
+
+.rc-rule-search {
+  width: 100%;
+  padding: 6px 9px;
+  margin-bottom: 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.rc-subgroup {
+  border-top: 1px solid var(--border);
+}
+
+.rc-subgroup:first-child {
+  border-top: none;
+}
+
+.rc-subgroup-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+/* Shared shape for both collapsible group headers. */
+.doctype-toggle,
+.rc-subgroup-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 5px 3px;
+  min-width: 0;
+}
+
+.doctype-toggle:hover,
+.rc-subgroup-toggle:hover {
+  color: var(--accent);
+}
+
+.rc-chevron {
+  width: 0.9em;
+  flex: none;
+  display: inline-block;
+  color: var(--muted);
+}
+
+.rc-subgroup-rules {
+  padding-left: 20px;
+}
 
 /* --- Top-bar project picker --- */
-.project-picker { display: flex; align-items: center; gap: 0.4rem; margin: 0 1rem; }
-.project-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #8a93a3); }
-.project-picker select { padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--border, #d3d7de);
-  font-weight: 600; background: var(--panel, #f6f7f9); }
+
+.project-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 16px;
+}
+
+.project-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.project-picker select {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  font-weight: 600;
+  background: var(--surface);
+}
 
 /* --- Documents grouped by type --- */
-.doctype-group { border-top: 1px solid var(--border, #eef); }
-.doctype-group:first-child { border-top: none; }
-.doctype-head { display: flex; align-items: center; }
-.doctype-toggle { flex: 1; display: flex; align-items: center; gap: 0.45rem; background: none; border: none;
-  cursor: pointer; text-align: left; font-size: 0.9rem; font-weight: 600; color: var(--text, #223);
-  padding: 0.45rem 0.2rem; }
-.doctype-toggle:hover { color: var(--accent, #2b6cb0); }
-.docrow-replace { background: none; border: none; cursor: pointer; color: var(--muted, #8a93a3);
-  font-size: 1rem; padding: 0 0.3rem; line-height: 1; }
-.docrow-replace:hover:not(:disabled) { color: var(--accent, #2b6cb0); }
-.docrow-replace:disabled { opacity: 0.4; cursor: default; }
+
+.doctype-group {
+  border-top: 1px solid var(--border);
+}
+
+.doctype-group:first-child {
+  border-top: none;
+}
+
+.doctype-head {
+  display: flex;
+  align-items: center;
+}
+
+/* Shared shape for the two icon actions on a document row. They sat at
+   different paddings, radii and hover treatments despite being the same
+   control in the same place. */
+.docrow-replace,
+.docrow-del {
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 7px;
+  cursor: pointer;
+  flex: none;
+}
+
+.docrow-replace:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--low-bg);
+}
+
+.docrow-del:hover:not(:disabled) {
+  color: var(--high-line);
+  background: var(--high-bg);
+}
+
+.docrow-replace:disabled,
+.docrow-del:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 
 /* --- Cross-check compare-all/none --- */
-.cross-controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
-.seg { display: inline-flex; border: 1px solid var(--border, #cfd4dc); border-radius: 7px; overflow: hidden; }
-.seg-btn { background: var(--panel, #f6f7f9); border: none; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.85rem;
-  border-right: 1px solid var(--border, #cfd4dc); }
-.seg-btn:last-child { border-right: none; }
-.seg-btn.on { background: var(--accent, #2b6cb0); color: #fff; font-weight: 600; }
-.cross-targets { margin-top: 0.4rem; }
+
+.cross-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  font: inherit;
+  font-size: 12.5px;
+  background: var(--bg);
+  border: none;
+  border-right: 1px solid var(--border);
+  padding: 5px 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.seg-btn:last-child {
+  border-right: none;
+}
+
+.seg-btn.on {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.cross-targets {
+  margin-top: 6px;
+}

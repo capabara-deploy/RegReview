@@ -28,6 +28,23 @@ const RECORD_TYPES: { value: string; label: string }[] = [
   { value: "unknown", label: "Other" },
 ];
 
+/**
+ * Display label for a record type.
+ *
+ * Six call sites were each doing `value.replace(/_/g, " ")`, which renders
+ * "risk_analysis" as "risk analysis" while the picker beside it shows
+ * "Risk analysis / RMF" — the same type under two names on one screen. The
+ * fallback stays for a type stored before it was in RECORD_TYPES.
+ */
+/** Sentence-case a lowercase engine value (a check phase or pass name). */
+function sentence(v: string): string {
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+function recordTypeLabel(value: string): string {
+  return RECORD_TYPES.find((t) => t.value === value)?.label ?? value.replace(/_/g, " ");
+}
+
 const SOURCE_GROUPS: { key: string; label: string; sources: string[] }[] = [
   { key: "standards", label: "FDA & standards", sources: ["iso_clause", "cfr", "guidance"] },
   { key: "sop", label: "Your procedures", sources: ["sop"] },
@@ -220,7 +237,7 @@ export function RunReview({
       .filter((t) => byType.has(t))
       .map((t) => ({
         type: t,
-        label: RECORD_TYPES.find((x) => x.value === t)?.label ?? t.replace(/_/g, " "),
+        label: recordTypeLabel(t),
         docs: byType.get(t)!,
       }));
   }, [ordered]);
@@ -292,7 +309,7 @@ export function RunReview({
   const typeLabel =
     types.size === 0
       ? "the selected documents"
-      : `${[...types].map((t) => t.replace(/_/g, " ")).join(" / ")} record${types.size > 1 ? "s" : ""}`;
+      : `${[...types].map(recordTypeLabel).join(" / ")} record${types.size > 1 ? "s" : ""}`;
 
   /**
    * Check passes that will not run, and why.
@@ -422,7 +439,7 @@ export function RunReview({
         const res = await api.setRecordType(r.recordId, recordType);
         const label = r.docId ?? r.filename;
         const parts = [
-          `${label} is now a ${recordType.replace(/_/g, " ")} record — ` +
+          `${label} is now a ${recordTypeLabel(recordType)} record — ` +
             `${res.applicableRules} rule(s) apply.`,
         ];
         // Past runs were produced under the old type's rules. Saying so matters:
@@ -431,7 +448,7 @@ export function RunReview({
         if (res.priorRuns > 0) {
           parts.push(
             `Its ${res.priorRuns} existing run(s) were done as a ` +
-              `${res.previousType.replace(/_/g, " ")} record and are unchanged — ` +
+              `${recordTypeLabel(res.previousType)} record and are unchanged — ` +
               `re-run to check it against the new rule set.`,
           );
         }
@@ -528,7 +545,7 @@ export function RunReview({
           <h2>Documents to review</h2>
           <div className="rp-head-actions">
             <label className="rp-uploadtype">
-              upload as
+              Upload as
               <select
                 className="rp-type"
                 value={uploadType}
@@ -627,7 +644,7 @@ export function RunReview({
                         >
                           {!RECORD_TYPES.some((t) => t.value === r.recordType) && (
                             <option value={r.recordType}>
-                              {r.recordType.replace(/_/g, " ")}
+                              {recordTypeLabel(r.recordType)}
                             </option>
                           )}
                           {RECORD_TYPES.map((t) => (
@@ -637,7 +654,7 @@ export function RunReview({
                           ))}
                         </select>
                         <span className="docrow-runs">
-                          {r.runs === 0 ? "never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
+                          {r.runs === 0 ? "Never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
                         </span>
                         <button
                           className="docrow-replace"
@@ -709,7 +726,7 @@ export function RunReview({
             </span>
             {(unpicked.length > 0 || pickedRecords.length > 1) && (
               <button className="rc-mini" onClick={() => setShowCrossTargets((v) => !v)}>
-                {showCrossTargets ? "▾ hide targets" : "▸ adjust targets"}
+                {showCrossTargets ? "▾ Hide targets" : "▸ Adjust targets"}
               </button>
             )}
           </div>
@@ -743,7 +760,7 @@ export function RunReview({
                     />
                     <span className="docrow-name">{r.docId ?? r.filename}</span>
                   </span>
-                  <span className="docrow-typeflat">{r.recordType.replace(/_/g, " ")}</span>
+                  <span className="docrow-typeflat">{recordTypeLabel(r.recordType)}</span>
                 </label>
               ))}
             </div>
@@ -765,12 +782,12 @@ export function RunReview({
           <div className="rp-head-actions">
             {!isAll && !noneSelected && (
               <span className="muted small">
-                scoped — runs {passesFor(selectedApplicable)} of 4 check passes
+                Scoped — runs {passesFor(selectedApplicable)} of 4 check passes
               </span>
             )}
-            {noneSelected && <span className="rc-warn">select at least one</span>}
+            {noneSelected && <span className="rc-warn">Select at least one</span>}
             <button className="rc-disclose" onClick={() => setShowRules((v) => !v)}>
-              {showRules ? "▾ hide" : "▸ choose"}
+              {showRules ? "▾ Hide" : "▸ Choose"}
             </button>
           </div>
         </div>
@@ -791,7 +808,7 @@ export function RunReview({
                     <>
                       {" "}
                       <button className="rc-mini" onClick={() => setShowRules(true)}>
-                        show
+                        Show
                       </button>
                     </>
                   )}
@@ -827,14 +844,14 @@ export function RunReview({
                       disabled={blocked}
                       onClick={() => setGroup(g.usable, true)}
                     >
-                      all
+                      All
                     </button>
                     <button
                       className="rc-mini"
                       disabled={blocked}
                       onClick={() => setGroup(g.usable, false)}
                     >
-                      none
+                      None
                     </button>
                   </div>
 
@@ -845,7 +862,7 @@ export function RunReview({
                         <>
                           {" "}
                           — they are set to apply to{" "}
-                          <strong>{g.covers.map((c) => c.replace(/_/g, " ")).join(", ")}</strong>
+                          <strong>{g.covers.map(recordTypeLabel).join(", ")}</strong>
                         </>
                       )}
                       .
@@ -940,14 +957,14 @@ export function RunReview({
                               disabled={usableInSub.length === 0}
                               onClick={() => setGroup(usableInSub, true)}
                             >
-                              all
+                              All
                             </button>
                             <button
                               className="rc-mini"
                               disabled={usableInSub.length === 0}
                               onClick={() => setGroup(usableInSub, false)}
                             >
-                              none
+                              None
                             </button>
                           </div>
                           {open && <div className="rc-subgroup-rules">{sub.rules.map(renderRule)}</div>}
@@ -965,7 +982,7 @@ export function RunReview({
       {/* 4 — cost and go */}
       <section className="rp-section rp-go">
         <label className="rc-opt">
-          samples
+          Samples
           <select
             value={samples}
             disabled={offline}
@@ -982,7 +999,7 @@ export function RunReview({
             checked={offline}
             onChange={(e) => setOffline(e.target.checked)}
           />
-          offline (free, crude)
+          Offline (free, crude)
         </label>
         <span className="rc-cost">
           {offline
@@ -1021,14 +1038,14 @@ export function RunReview({
                         {r.status === "complete"
                           ? `${r.findingCount ?? 0} finding${r.findingCount === 1 ? "" : "s"}`
                           : r.status === "failed"
-                            ? "failed"
+                            ? "Failed"
                             : r.status === "pending"
-                              ? "queued"
-                              : (r.phase ?? "working")}
+                              ? "Queued"
+                              : sentence(r.phase ?? "working")}
                       </span>
                       {r.runId && (
                         <button className="rc-mini" onClick={() => onOpenRun(r.runId!)}>
-                          view
+                          View
                         </button>
                       )}
                     </div>
