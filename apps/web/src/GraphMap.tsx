@@ -2,13 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   AuthError,
+  GRAPH_ISSUE_LABEL,
   LANE_LABEL,
   LANE_ORDER,
   type Graph,
   type GraphEdge,
   type GraphNode,
+  type GraphIssue,
+  type GraphIssueKind,
   type Lane,
 } from "./api";
+import type { Page } from "./routes";
 
 /**
  * The document map.
@@ -83,10 +87,30 @@ interface Positioned extends GraphNode {
   y: number;
 }
 
-export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
+export function GraphMap({
+  target,
+  onNavigate,
+  onAuthError,
+}: {
+  /** Node id from the address bar, so a map link opens with that node open. */
+  target: string | null;
+  onNavigate: (page: Page, target?: string | null) => void;
+  onAuthError: () => void;
+}) {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(target);
+  const [showIssues, setShowIssues] = useState(false);
+
+  // A link into the map names a node; follow it when the address changes.
+  useEffect(() => setSelected(target), [target]);
+
+  // Selecting a node puts it in the address bar, so the view a reviewer is
+  // looking at is always the one a colleague gets from the same URL.
+  const select = (nodeId: string | null) => {
+    setSelected(nodeId);
+    onNavigate("map", nodeId);
+  };
 
   useEffect(() => {
     void (async () => {
@@ -179,6 +203,21 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
 
   const risk = graph.risk;
 
+  // Ordered by what a reviewer should deal with first: a document that does not
+  // exist outranks one that merely has not been read again lately.
+  const issueOrder: GraphIssueKind[] = [
+    "owed_document",
+    "broken_reference",
+    "orphan",
+    "unreviewed",
+    "stale_review",
+  ];
+  const byKind = new Map<GraphIssueKind, GraphIssue[]>();
+  for (const i of graph.issues) {
+    if (!byKind.has(i.kind)) byKind.set(i.kind, []);
+    byKind.get(i.kind)!.push(i);
+  }
+
   return (
     <div className="graphmap">
       <div className="graphmap-bar">
@@ -193,7 +232,7 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
           )}
         </span>
         {selected && (
-          <button className="secondary" onClick={() => setSelected(null)}>
+          <button className="secondary" onClick={() => select(null)}>
             Clear selection
           </button>
         )}
@@ -209,6 +248,52 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
             {risk.thresholdSource ? ` (${risk.thresholdSource})` : ""} ·{" "}
             {risk.undocumented} undocumented · {risk.unsubmitted} documented, not filed
           </span>
+        </div>
+      )}
+
+      {/* Problems with the RECORD, not inside a document: broken references,
+          documents a change owes, orphans, and gaps in review coverage. All
+          deterministic, none carrying a severity tier — they are not findings. */}
+      {graph.issues.length > 0 && (
+        <div className="gm-issues">
+          <button className="gm-issues-toggle" onClick={() => setShowIssues((v) => !v)}>
+            <span className="rc-chevron">{showIssues ? "▾" : "▸"}</span>
+            <span className="gm-issues-count">
+              {graph.issues.length} issue{graph.issues.length === 1 ? "" : "s"} with the record
+            </span>
+            <span className="gm-issues-sum">
+              {issueOrder
+                .filter((k) => byKind.get(k)?.length)
+                .map((k) => `${byKind.get(k)!.length} ${GRAPH_ISSUE_LABEL[k].toLowerCase()}`)
+                .join(" · ")}
+            </span>
+          </button>
+          {showIssues && (
+            <div className="gm-issue-list">
+              {issueOrder.map((kind) => {
+                const rows = byKind.get(kind);
+                if (!rows || rows.length === 0) return null;
+                return (
+                  <div key={kind} className="gm-issue-group">
+                    <div className="gm-issue-kind">
+                      {GRAPH_ISSUE_LABEL[kind]} <span className="muted">({rows.length})</span>
+                    </div>
+                    {rows.map((i, n) => (
+                      <button
+                        key={`${i.nodeId}-${n}`}
+                        className="gm-issue-row"
+                        onClick={() => select(i.nodeId)}
+                        title={i.detail}
+                      >
+                        <span className="gm-issue-label">{i.label}</span>
+                        <span className="gm-issue-detail">{i.detail}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -287,7 +372,7 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
                 key={n.nodeId}
                 transform={`translate(${n.x},${n.y})`}
                 opacity={isDim(n.nodeId) ? 0.25 : 1}
-                onClick={() => setSelected(n.nodeId === selected ? null : n.nodeId)}
+                onClick={() => select(n.nodeId === selected ? null : n.nodeId)}
                 style={{ cursor: "pointer" }}
               >
                 <rect
@@ -338,6 +423,24 @@ export function GraphMap({ onAuthError }: { onAuthError: () => void }) {
             {selectedNode.sublabel}
             {selectedNode.kind === "document" && selectedNode.findingCount > 0 &&
               ` · ${selectedNode.findingCount} finding(s)`}
+          </div>
+
+          {/* The pathway out of the map: every node that stands for something
+              elsewhere in the product offers the way there. */}
+          <div className="gm-actions">
+            {selectedNode.recordId && (
+              <button onClick={() => onNavigate("findings", selectedNode.recordId)}>
+                Open document
+              </button>
+            )}
+            {selectedNode.changeId && (
+              <button onClick={() => onNavigate("changes", selectedNode.changeId)}>
+                {selectedNode.kind === "proposed" ? "Open the change that owes it" : "Open change"}
+              </button>
+            )}
+            {selectedNode.kind === "submission" && (
+              <button onClick={() => onNavigate("changes")}>Open submissions</button>
+            )}
           </div>
 
           {selectedNode.kind === "proposed" && (

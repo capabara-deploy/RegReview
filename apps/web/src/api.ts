@@ -256,10 +256,34 @@ export interface GraphRisk {
   owedDocuments: number;
 }
 
+export type GraphIssueKind =
+  | "broken_reference"
+  | "owed_document"
+  | "orphan"
+  | "unreviewed"
+  | "stale_review";
+
+export const GRAPH_ISSUE_LABEL: Record<GraphIssueKind, string> = {
+  broken_reference: "Cites a document not held",
+  owed_document: "Document owed, not written",
+  orphan: "Not referenced by anything",
+  unreviewed: "Never reviewed",
+  stale_review: "Reviewed under an older corpus",
+};
+
+/** A problem with the record itself, as opposed to a finding inside a document. */
+export interface GraphIssue {
+  kind: GraphIssueKind;
+  nodeId: string;
+  label: string;
+  detail: string;
+}
+
 export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   danglingRefs: { srcNodeId: string; dstRef: string }[];
+  issues: GraphIssue[];
   risk: GraphRisk | null;
 }
 
@@ -307,6 +331,12 @@ export interface RunSummary {
 }
 
 export interface RecordDetail {
+  /**
+   * The change this document captures, if any. The join has always existed on
+   * `changes.record_id`; surfacing it is what lets a reviewer reading a finding
+   * on a change order reach the change and its accumulated risk.
+   */
+  capturedChange: { changeId: string; proposal: string; stage: string } | null;
   recordId: string;
   filename: string;
   recordType: string;

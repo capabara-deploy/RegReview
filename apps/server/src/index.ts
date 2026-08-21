@@ -395,7 +395,21 @@ app.get("/api/records/:recordId", async (req, res) => {
     .prepare(`SELECT * FROM runs WHERE record_id = ? ORDER BY started_at DESC`)
     .all<RunRow>(recordId);
 
+  // The change this document captures, if it captures one. Surfaced so a
+  // reviewer reading a finding on a change order can reach the change itself —
+  // the join has always existed on `changes.record_id` and was never navigable.
+  const captured = await db
+    .prepare(
+      `SELECT change_id, proposal, stage FROM changes
+        WHERE record_id = ? AND stage NOT IN ('superseded')
+        ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get<{ change_id: string; proposal: string; stage: string }>(recordId);
+
   res.json({
+    capturedChange: captured
+      ? { changeId: captured.change_id, proposal: captured.proposal, stage: captured.stage }
+      : null,
     recordId: record.record_id,
     filename: record.filename,
     recordType: record.record_type,

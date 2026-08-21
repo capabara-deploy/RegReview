@@ -2822,6 +2822,160 @@ button.secondary {
   top: 4px;
 }
 
+/* Problems with the record, not inside a document. Deliberately styled as a
+   quiet list rather than as findings: these carry no severity tier, and giving
+   them a findings-like treatment would imply an evidence standard they do not
+   meet. */
+.gm-issues {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.gm-issues-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.gm-issues-toggle:hover {
+  color: var(--accent);
+}
+
+/* A bare text node inside a flex row is a flex item, and it shrinks — the
+   heading was wrapping to three lines beside a summary that had room to spare. */
+.gm-issues-count {
+  flex: none;
+  white-space: nowrap;
+}
+
+.gm-issues-sum {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.gm-issue-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 0 16px 10px;
+}
+
+.gm-issue-group {
+  margin-bottom: 10px;
+}
+
+.gm-issue-kind {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 6px 0 4px;
+}
+
+.gm-issue-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.gm-issue-row:hover {
+  background: var(--bg);
+}
+
+/* A fixed label column, so the detail text starts at one x down the list. */
+.gm-issue-label {
+  flex: 0 0 190px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gm-issue-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* The pathway out of a node. Every surface that stands for something elsewhere
+   in the product offers the way there, so the map is a place you pass through
+   rather than a place you land. */
+.gm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.gm-actions button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gm-actions button:hover {
+  background: #eef2f7;
+}
+
+/* Links out of a document: the change it captures, and where it sits. */
+.fb-links {
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+  align-items: center;
+}
+
+.fb-links .link-btn {
+  font: inherit;
+  font-size: 12px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+/* Links out of a change: its document, and where it sits on the map. */
+.cd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
 .gm-edges {
   list-style: none;
   padding: 0;

@@ -205,6 +205,23 @@ Then open **http://localhost:5174** and sign in. **Local demo login:**
   `npm run ledger:demo -- --reseed` rebuilds the VP-400 demo rows to exercise all of it.
 - **Phase 3 — cross-document graph + map.** Deterministic reference edges,
   `GET /api/graph`, a dependency-free SVG **Map** tab. `npm run graph:demo`.
+- **Pipeline integration (2026-08-20).** Changes and Map stopped being dead ends.
+  **Routing** (`apps/web/src/routes.ts`) — hash routes with an optional target
+  (`#/map/rec%3Aabc`, `#/changes/chg-1`, `#/findings/rec-9`); navigation is derived
+  from the address bar, so a pasted link, the back button and an in-app click all
+  take one path. **Cross-links both ways**: map node → its document or change;
+  change → the document that captures it, and → its node on the map; document →
+  the change it captures (new `capturedChange` on `GET /api/records/:id`) and →
+  the map. **The map now draws the record, not the inventory**: change nodes, the
+  document each undocumented change owes (dashed `proposed` node), submissions,
+  accumulated risk on nodes and in the header, five lanes, three draw kinds,
+  deterministic layout. **`deriveIssues()`** adds record-level problems — broken
+  references, owed documents, orphans, never-reviewed, stale-corpus — shown as a
+  collapsible list above the map. Plan: `docs/roadmap/integration-plan.md`.
+  **NOT done: the device spine** (`records` still has no device column, `PROJECTS`
+  is still a hardcoded one-element array) — deliberately, since it is invisible
+  with one device and is a prod schema migration; do it when a second device exists.
+
 - **Corpus 29 → 110 rules.** 35 CFR, 46 guidance, 26 ISO-clause, 3 logic — grounded
   in real FDA inspection-citation frequency and current guidance (verified currency
   on biocompat 2023, sterility 2024, AI 2024/25, software CSA 2025). Plus a GMP SOP

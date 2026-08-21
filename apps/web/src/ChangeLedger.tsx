@@ -14,6 +14,7 @@ import {
   type SubmissionKind,
   type SubmissionStatus,
 } from "./api";
+import { mapNodeForChange, type Page } from "./routes";
 
 /**
  * The cumulative change ledger.
@@ -143,13 +144,27 @@ function daysSince(iso: string | null): number | null {
   return Number.isFinite(ms) ? Math.floor(ms / 86_400_000) : null;
 }
 
-export function ChangeLedger({ onAuthError }: { onAuthError: () => void }) {
+export function ChangeLedger({
+  target,
+  onNavigate,
+  onAuthError,
+}: {
+  /** Change id from the address bar, so a link opens that change's detail. */
+  target: string | null;
+  onNavigate: (page: Page, target?: string | null) => void;
+  onAuthError: () => void;
+}) {
   const [baselines, setBaselines] = useState<Baseline[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessment, setAssessment] = useState<CumulativeAssessment | null>(null);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [openChange, setOpenChange] = useState<string | null>(null);
+  const [openChange, setOpenChange] = useState<string | null>(target);
+
+  // A link into Changes names a change; follow it when the address changes.
+  useEffect(() => {
+    if (target) setOpenChange(target);
+  }, [target]);
 
   const fail = useCallback(
     (e: unknown) => {
@@ -266,6 +281,7 @@ export function ChangeLedger({ onAuthError }: { onAuthError: () => void }) {
               onChanged={reload}
               onClose={() => setOpenChange(null)}
               onError={fail}
+              onNavigate={onNavigate}
             />
           )}
 
@@ -559,6 +575,7 @@ function ChangeDetail({
   onChanged,
   onClose,
   onError,
+  onNavigate,
 }: {
   change: Change;
   gaps: CumulativeAssessment["gaps"];
@@ -566,6 +583,7 @@ function ChangeDetail({
   onChanged: () => void;
   onClose: () => void;
   onError: (e: unknown) => void;
+  onNavigate: (page: Page, target?: string | null) => void;
 }) {
   const eff = change.effective;
   const floor = eff?.floor ?? 1;
@@ -605,6 +623,17 @@ function ChangeDetail({
         <span className="cd-date">{change.changedAt ?? change.createdAt.slice(0, 10)}</span>
         <button className="link-btn" onClick={onClose}>
           Close
+        </button>
+      </div>
+
+      <div className="cd-actions">
+        {change.recordId && (
+          <button onClick={() => onNavigate("findings", change.recordId)}>
+            Open the document that captures this
+          </button>
+        )}
+        <button className="secondary" onClick={() => onNavigate("map", mapNodeForChange(change.changeId))}>
+          Show on map
         </button>
       </div>
 

@@ -257,12 +257,138 @@ export interface GraphRisk {
   owedDocuments: number;
 }
 
+/**
+ * A problem with the record itself, as opposed to a finding inside a document.
+ *
+ * These are the checks only a view of the whole record can make. Each is
+ * deterministic — no model, no severity tier — and each names the node it is
+ * about so the map can point at it.
+ */
+export const GraphIssueKind = z.enum([
+  /** Cites a document id we do not hold. */
+  "broken_reference",
+  /** A change is in the product with no controlled document capturing it. */
+  "owed_document",
+  /** Nothing cites it and it cites nothing — outside the design history, or its links are missing. */
+  "orphan",
+  /** No completed review. */
+  "unreviewed",
+  /** Last reviewed under a superseded corpus or prompt version. */
+  "stale_review",
+]);
+export type GraphIssueKind = z.infer<typeof GraphIssueKind>;
+
+export const GRAPH_ISSUE_LABEL: Record<GraphIssueKind, string> = {
+  broken_reference: "Cites a document not held",
+  owed_document: "Document owed, not written",
+  orphan: "Not referenced by anything",
+  unreviewed: "Never reviewed",
+  stale_review: "Reviewed under an older corpus",
+};
+
+export interface GraphIssue {
+  kind: GraphIssueKind;
+  /** The node the issue is about. */
+  nodeId: string;
+  label: string;
+  detail: string;
+}
+
 export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   /** dstRefs that resolved to nothing we hold — "cites something not in scope". */
   danglingRefs: { srcNodeId: string; dstRef: string }[];
+  /** Problems with the record, not inside a document. See `GraphIssue`. */
+  issues: GraphIssue[];
   risk: GraphRisk | null;
+}
+
+/**
+ * Derive the record-level issues from an assembled graph.
+ *
+ * Orphan detection deliberately ignores changes, owed documents and
+ * submissions: those are connected by construction, and flagging them would
+ * bury the real signal — a controlled document that nothing in the design
+ * history reaches.
+ */
+export function deriveIssues(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  danglingRefs: Graph["danglingRefs"],
+  coverage: Map<string, { reviewed: boolean; stale: boolean; corpusVersion: string | null }>,
+): GraphIssue[] {
+  const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+  const label = (id: string) => byId.get(id)?.label ?? id;
+  const issues: GraphIssue[] = [];
+
+  for (const d of danglingRefs) {
+    issues.push({
+      kind: "broken_reference",
+      nodeId: d.srcNodeId,
+      label: label(d.srcNodeId),
+      detail: `Cites ${d.dstRef}, which is not among the documents held.`,
+    });
+  }
+
+  const linked = new Set<string>();
+  for (const e of edges) {
+    if (!e.dstNodeId) continue;
+    linked.add(e.srcNodeId);
+    linked.add(e.dstNodeId);
+  }
+
+  for (const n of nodes) {
+    if (n.kind === "proposed") {
+      issues.push({
+        kind: "owed_document",
+        nodeId: n.nodeId,
+        label: n.sublabel,
+        detail: "A change is in the product and no controlled document captures it.",
+      });
+      continue;
+    }
+    if (n.kind !== "document") continue;
+
+    if (!linked.has(n.nodeId)) {
+      // Careful with the wording: a document can be unlinked while still citing
+      // things, if none of those citations resolve to a document we hold. Saying
+      // "it references nothing" would be false for exactly the documents most
+      // likely to be flagged, since a broken reference is also an unresolved one.
+      const citesUnheld = danglingRefs.some((d) => d.srcNodeId === n.nodeId);
+      issues.push({
+        kind: "orphan",
+        nodeId: n.nodeId,
+        label: n.label,
+        detail: citesUnheld
+          ? "Nothing references this document, and none of its own references resolve to a " +
+            "document held here — so it sits outside the reference graph entirely."
+          : "Nothing references this document and it references nothing. Either it sits " +
+            "outside the design history, or the references that should reach it are missing.",
+      });
+    }
+
+    const c = n.recordId ? coverage.get(n.recordId) : undefined;
+    if (c && !c.reviewed) {
+      issues.push({
+        kind: "unreviewed",
+        nodeId: n.nodeId,
+        label: n.label,
+        detail: "No completed review. Nothing is known about this document's conformance.",
+      });
+    } else if (c && c.stale) {
+      issues.push({
+        kind: "stale_review",
+        nodeId: n.nodeId,
+        label: n.label,
+        detail:
+          `Last reviewed under corpus ${c.corpusVersion ?? "unknown"}, which has since been ` +
+          `superseded. Findings from different corpus versions are not comparable.`,
+      });
+    }
+  }
+
+  return issues;
 }
 
 /**
@@ -277,6 +403,7 @@ export function assembleGraph(
   nodes: GraphNode[],
   rawEdges: RawEdge[],
   risk: GraphRisk | null = null,
+  coverage: Map<string, { reviewed: boolean; stale: boolean; corpusVersion: string | null }> = new Map(),
 ): Graph {
   // Only documents can be the target of a written reference — a change and an
   // owed document have no id anyone could have cited.
@@ -303,5 +430,11 @@ export function assembleGraph(
     });
   }
 
-  return { nodes, edges, danglingRefs, risk };
+  return {
+    nodes,
+    edges,
+    danglingRefs,
+    issues: deriveIssues(nodes, edges, danglingRefs, coverage),
+    risk,
+  };
 }

@@ -1,3 +1,4 @@
+import { CORPUS_VERSION, PROMPT_VERSION } from "./config.js";
 import { getCustomerDb, type Db } from "./db/index.js";
 import {
   cumulativeAssessment,
@@ -91,6 +92,37 @@ export async function loadGraph(db: Db = getCustomerDb()): Promise<Graph> {
     .all()) as { record_id: string; high: number; medium: number; low: number; n: number }[];
 
   const aggByRecord = new Map(agg.map((a) => [a.record_id, a]));
+
+  // Review coverage per record, for the record-level issues. A document that
+  // was never reviewed, or was last reviewed under a superseded corpus, is a
+  // hole in the record that nothing else in the product says out loud —
+  // findings from different corpus versions are explicitly not comparable.
+  const runRows = (await db
+    .prepare(
+      `SELECT record_id, corpus_version, prompt_version
+         FROM (
+           SELECT record_id, corpus_version, prompt_version,
+                  ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY started_at DESC) AS rn
+             FROM runs WHERE status = 'complete'
+         ) r WHERE rn = 1`,
+    )
+    .all()) as { record_id: string; corpus_version: string | null; prompt_version: string | null }[];
+  const latestRun = new Map(runRows.map((r) => [r.record_id, r]));
+
+  const coverage = new Map<
+    string,
+    { reviewed: boolean; stale: boolean; corpusVersion: string | null }
+  >();
+  for (const r of recs) {
+    const run = latestRun.get(r.record_id);
+    coverage.set(r.record_id, {
+      reviewed: run !== undefined,
+      stale:
+        run !== undefined &&
+        (run.corpus_version !== CORPUS_VERSION || run.prompt_version !== PROMPT_VERSION),
+      corpusVersion: run?.corpus_version ?? null,
+    });
+  }
 
   const nodes: GraphNode[] = [];
   const rawEdges: RawEdge[] = [];
@@ -273,5 +305,5 @@ export async function loadGraph(db: Db = getCustomerDb()): Promise<Graph> {
     };
   }
 
-  return assembleGraph(nodes, rawEdges, risk);
+  return assembleGraph(nodes, rawEdges, risk, coverage);
 }
