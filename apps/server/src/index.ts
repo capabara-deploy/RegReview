@@ -245,7 +245,26 @@ if (AUTH_ENABLED) {
     if (!parsed.success) {
       return res.status(400).json({ error: "username and password are required" });
     }
-    const username = await verifyLogin(parsed.data.username, parsed.data.password);
+    /**
+     * A failure to REACH the account database is not a failed login.
+     *
+     * `verifyLogin` throws when MongoDB is unreachable, and without this the
+     * exception became a bare 500 that the sign-in screen reported as bad
+     * credentials — sending whoever hit it to check their password while the
+     * real problem was an Atlas IP allowlist. Say which of the two it is.
+     */
+    let username: string | null;
+    try {
+      username = await verifyLogin(parsed.data.username, parsed.data.password);
+    } catch (err) {
+      console.error("[login] account database unreachable:", (err as Error).message);
+      return res.status(503).json({
+        error:
+          "Could not reach the account database, so your sign-in could not be checked. " +
+          "This is not a password problem. If this is a dev machine, the usual cause is " +
+          "MongoDB Atlas blocking this IP (Security → Network Access).",
+      });
+    }
     if (!username) {
       return res.status(401).json({ error: "invalid credentials" });
     }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "./api";
+import { api, AuthError } from "./api";
 
 /**
  * The reviewer sign-in screen.
@@ -22,8 +22,27 @@ export function Login({ onSignedIn }: { onSignedIn: (username: string) => void }
     try {
       const result = await api.login(username, password);
       onSignedIn(result.username);
-    } catch {
-      setError("Invalid credentials");
+    } catch (e) {
+      /**
+       * Only a 401 is a credential problem.
+       *
+       * This used to be a bare `catch` reporting "Invalid credentials" for
+       * everything — a dead account database, an API that was not running, a
+       * CORS rejection. Every one of those sent the reader to re-check a
+       * password that was never wrong, which is the most expensive kind of
+       * wrong error message.
+       */
+      if (e instanceof AuthError) {
+        setError("Invalid credentials.");
+      } else if (e instanceof TypeError) {
+        // fetch() rejects rather than resolving when it cannot reach the host.
+        setError(
+          "Could not reach the API. Check that the server is running " +
+            "(npm run dev:server) and that it is on the expected port.",
+        );
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
       setBusy(false);
     }
