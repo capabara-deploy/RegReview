@@ -2682,6 +2682,11 @@ button.secondary {
   background: var(--surface);
 }
 
+.gm-hint {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .gm-broken {
   color: var(--high-line);
   font-weight: 600;
@@ -2722,6 +2727,7 @@ button.secondary {
 
 .graphmap-svg {
   display: block;
+  margin: 0 auto;
 }
 
 .gm-lane {
@@ -2732,8 +2738,34 @@ button.secondary {
   letter-spacing: 0.05em;
 }
 
-.gm-label {
+/* The device at the centre of the map. */
+.gm-center {
+  font-size: 14px;
+  font-weight: 700;
+  fill: #ffffff;
+}
+
+.gm-center-sub {
+  font-size: 10px;
+  fill: #cfe0ef;
+}
+
+/* Lane hubs — the ring between the device and its documents. */
+.gm-hub {
   font-size: 11px;
+  font-weight: 700;
+  fill: #17324b;
+}
+
+.gm-hub-sub {
+  font-size: 9px;
+  fill: #2d5f8a;
+}
+
+/* Leaf labels sit outside their node, so they need to read against the page
+   rather than against a fill. */
+.gm-label {
+  font-size: 10.5px;
   font-weight: 600;
   fill: #1a2332;
 }
@@ -2743,10 +2775,17 @@ button.secondary {
   fill: #6b7280;
 }
 
+/* Inside a leaf: the change ledger's score, or a finding count. */
 .gm-risk-badge {
   font-size: 10px;
   font-weight: 700;
   fill: #1a2332;
+}
+
+.gm-leaf-count {
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: #6b7280;
 }
 
 .gm-gapcount {

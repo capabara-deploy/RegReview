@@ -43,13 +43,23 @@ import type { Page } from "./routes";
  * there is room to read it.
  */
 
-const NODE_W = 168;
-const NODE_H = 46;
-const COL_GAP = 18;
-const LANE_GAP = 46;
-/** Wide enough for the longest lane name ("Change documents", ~135px). */
-const LANE_LABEL_W = 152;
-const PAD = 24;
+/**
+ * Radial geometry.
+ *
+ * Three rings: the cleared device at the centre, one hub per lane, and every
+ * document, change and owed document on the outer ring. Angles come from lane
+ * order and a stable sort, never from a simulation, so the same corpus always
+ * draws the same picture — the property that lets a screenshot of this go into
+ * an audit response.
+ */
+const CENTER_R = 62;
+const LANE_R = 36;
+const LANE_DIST = 186;
+const LEAF_R = 17;
+const LEAF_DIST = 344;
+const LABEL_GAP = 8;
+/** Room outside the outer ring for leaf labels, which sit beside their node. */
+const MARGIN = 168;
 
 const SEV_FILL: Record<string, string> = {
   high: "#fdeaea",
@@ -64,13 +74,13 @@ const SEV_STROKE: Record<string, string> = {
 
 /** Kind decides the shape; severity only ever tints a real document. */
 const KIND_FILL: Record<string, string> = {
-  document: "#f4f5f7",
-  change: "#e8eef7",
-  proposed: "#fbfbfa",
-  submission: "#e6f0ea",
+  document: "#eef1f5",
+  change: "#dbe7f5",
+  proposed: "#fdf2f1",
+  submission: "#e2f0e9",
 };
 const KIND_STROKE: Record<string, string> = {
-  document: "#c4cad4",
+  document: "#b9c0cc",
   change: "#4a6fa5",
   proposed: "#c0392b",
   submission: "#2e7d5b",
@@ -85,6 +95,15 @@ const EDGE_STROKE: Record<string, string> = {
 interface Positioned extends GraphNode {
   x: number;
   y: number;
+  /** Angle from the centre, for placing the label on the outward side. */
+  angle: number;
+}
+
+interface Hub {
+  lane: Lane;
+  x: number;
+  y: number;
+  count: number;
 }
 
 export function GraphMap({
@@ -130,40 +149,55 @@ export function GraphMap({
       if (!byLane.has(n.lane)) byLane.set(n.lane, []);
       byLane.get(n.lane)!.push(n);
     }
+    const lanes = LANE_ORDER.filter((l) => (byLane.get(l)?.length ?? 0) > 0);
+    const total = lanes.reduce((t, l) => t + byLane.get(l)!.length, 0) || 1;
+
+    const size = (LEAF_DIST + LEAF_R + MARGIN) * 2;
+    const cx = size / 2;
+    const cy = size / 2;
+
+    // Each lane gets an arc proportional to how many nodes it holds, with a
+    // floor so a one-node lane is still a readable wedge rather than a sliver.
+    const TAU = Math.PI * 2;
+    const MIN_SECTOR = TAU * 0.09;
+    let sectors = lanes.map((l) => Math.max((byLane.get(l)!.length / total) * TAU, MIN_SECTOR));
+    const norm = TAU / sectors.reduce((a, b) => a + b, 0);
+    sectors = sectors.map((r) => r * norm);
 
     const positioned = new Map<string, Positioned>();
-    const lanes: { lane: Lane; y: number; h: number; count: number }[] = [];
-    // Widest lane decides the canvas; every lane wraps at that column count so
-    // the picture stays rectangular instead of one lane running off the side.
-    const widest = Math.max(1, ...[...byLane.values()].map((v) => v.length));
-    const perRow = Math.min(widest, 6);
-    let y = PAD;
+    const hubs: Hub[] = [];
+    let a = -Math.PI / 2; // start at the top and read clockwise, in pipeline order
 
-    for (const lane of LANE_ORDER) {
-      const items = byLane.get(lane);
-      if (!items || items.length === 0) continue;
-      items.sort((a, b) => a.label.localeCompare(b.label));
-      const rows = Math.ceil(items.length / perRow);
+    lanes.forEach((lane, li) => {
+      const sector = sectors[li]!;
+      const items = byLane.get(lane)!.slice().sort((x, y) => x.label.localeCompare(y.label));
+      const mid = a + sector / 2;
+      hubs.push({
+        lane,
+        x: cx + Math.cos(mid) * LANE_DIST,
+        y: cy + Math.sin(mid) * LANE_DIST,
+        count: items.length,
+      });
+
+      // Inset the leaves from the sector edges so neighbouring lanes' outer
+      // nodes do not collide where two wedges meet.
+      const inset = Math.min(sector * 0.14, 0.14);
+      const from = a + inset;
+      const to = a + sector - inset;
       items.forEach((n, i) => {
-        const col = i % perRow;
-        const row = Math.floor(i / perRow);
+        const t = items.length === 1 ? 0.5 : i / (items.length - 1);
+        const ang = from + (to - from) * t;
         positioned.set(n.nodeId, {
           ...n,
-          x: PAD + LANE_LABEL_W + col * (NODE_W + COL_GAP),
-          y: y + row * (NODE_H + 12),
+          x: cx + Math.cos(ang) * LEAF_DIST,
+          y: cy + Math.sin(ang) * LEAF_DIST,
+          angle: ang,
         });
       });
-      const h = rows * (NODE_H + 12) - 12;
-      lanes.push({ lane, y, h, count: items.length });
-      y += h + LANE_GAP;
-    }
+      a += sector;
+    });
 
-    return {
-      positioned,
-      lanes,
-      width: PAD * 2 + LANE_LABEL_W + perRow * (NODE_W + COL_GAP),
-      height: y - LANE_GAP + PAD,
-    };
+    return { positioned, hubs, cx, cy, size };
   }, [graph]);
 
   if (error) return <div className="error">{error}</div>;
@@ -212,7 +246,6 @@ export function GraphMap({
   const edgeVisible = (e: GraphEdge): boolean =>
     !selected || e.srcNodeId === selected || e.dstNodeId === selected;
 
-  const center = (n: Positioned) => ({ x: n.x + NODE_W / 2, y: n.y + NODE_H / 2 });
   const selectedNode = selected ? layout.positioned.get(selected) : null;
   const selectedEdges = selected
     ? graph.edges.filter((e) => e.srcNodeId === selected || e.dstNodeId === selected)
@@ -253,10 +286,14 @@ export function GraphMap({
             <> · <strong className="gm-broken">{risk.owedDocuments} document(s) owed</strong></>
           )}
         </span>
-        {selected && (
+        {/* References are hidden until a node is selected, so say so — otherwise
+            the map looks like it has forgotten the 66 edges it just counted. */}
+        {selected ? (
           <button className="secondary" onClick={() => select(null)}>
             Clear selection
           </button>
+        ) : (
+          <span className="muted gm-hint">Select a node to trace its references</span>
         )}
       </div>
 
@@ -320,62 +357,96 @@ export function GraphMap({
       )}
 
       <div className="graphmap-scroll">
-        <svg width={layout.width} height={layout.height} className="graphmap-svg">
-          <defs>
-            <marker id="gm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
-            </marker>
-          </defs>
-
-          {layout.lanes.map((l) => (
-            <g key={l.lane}>
-              <rect
-                x={PAD}
-                y={l.y - 8}
-                width={layout.width - PAD * 2}
-                height={l.h + 16}
-                rx={8}
-                fill={l.lane === "proposition" ? "#f7f9fc" : "#fafaf8"}
-                stroke="#eceae4"
-              />
-              <text x={PAD + 12} y={l.y + 16} className="gm-lane">
-                {LANE_LABEL[l.lane]}
-              </text>
-              <text x={PAD + 12} y={l.y + 32} className="gm-sub">
-                {l.count}
-              </text>
-            </g>
+        <svg
+          width={layout.size}
+          height={layout.size}
+          viewBox={`0 0 ${layout.size} ${layout.size}`}
+          className="graphmap-svg"
+        >
+          {/* Spokes: centre to each lane hub, hub to each of its nodes. These
+              are the structure of the record, drawn always. */}
+          {layout.hubs.map((h) => (
+            <line
+              key={`spoke-${h.lane}`}
+              x1={layout.cx}
+              y1={layout.cy}
+              x2={h.x}
+              y2={h.y}
+              stroke="#c9cdd6"
+              strokeWidth={1.4}
+            />
           ))}
 
-          {graph.edges.map((e) => {
-            const a = layout.positioned.get(e.srcNodeId);
-            const b = e.dstNodeId ? layout.positioned.get(e.dstNodeId) : null;
-            if (!a || !b) return null;
-            const p1 = center(a);
-            const p2 = center(b);
-            const stroke = EDGE_STROKE[e.drawKind] ?? "#8895aa";
-            // Two nodes on the same row share a y, so a centre-to-centre curve
-            // degenerates to a straight horizontal line that runs through every
-            // node between them. Bow those under the row instead. Most edges in
-            // the cleared lane are same-row (documents citing procedures), so
-            // without this the busiest lane is also the least readable one.
-            const sameRow = Math.abs(a.y - b.y) < 4;
-            const d = sameRow
-              ? `M ${p1.x} ${a.y + NODE_H} C ${p1.x} ${a.y + NODE_H + 26}, ${p2.x} ${b.y + NODE_H + 26}, ${p2.x} ${b.y + NODE_H}`
-              : `M ${p1.x} ${p1.y} C ${p1.x} ${(p1.y + p2.y) / 2}, ${p2.x} ${(p1.y + p2.y) / 2}, ${p2.x} ${p2.y}`;
+          {[...layout.positioned.values()].map((n) => {
+            const h = layout.hubs.find((x) => x.lane === n.lane);
+            if (!h) return null;
             return (
-              <path
-                key={e.edgeId}
-                d={d}
-                fill="none"
-                stroke={edgeVisible(e) ? stroke : "#e6e9ef"}
-                strokeWidth={edgeVisible(e) && selected ? 1.8 : 1}
-                strokeDasharray={e.drawKind === "governs" ? "3 3" : undefined}
-                markerEnd="url(#gm-arrow)"
-                opacity={edgeVisible(e) ? 0.8 : 0.2}
+              <line
+                key={`twig-${n.nodeId}`}
+                x1={h.x}
+                y1={h.y}
+                x2={n.x}
+                y2={n.y}
+                stroke="#d5d9e0"
+                strokeWidth={1}
+                opacity={isDim(n.nodeId) ? 0.25 : 1}
               />
             );
           })}
+
+          {/* Actual references, only for the selected node.
+              Drawing all 66 at once turns the picture into a hairball and hides
+              the structure the rings exist to show; on selection they are the
+              most useful thing on screen. Curved through the centre so a chord
+              across the circle reads as a relationship, not as a spoke. */}
+          {selected &&
+            graph.edges.map((e) => {
+              if (e.srcNodeId !== selected && e.dstNodeId !== selected) return null;
+              const a = layout.positioned.get(e.srcNodeId);
+              const b = e.dstNodeId ? layout.positioned.get(e.dstNodeId) : null;
+              if (!a || !b) return null;
+              return (
+                <path
+                  key={e.edgeId}
+                  d={`M ${a.x} ${a.y} Q ${layout.cx} ${layout.cy} ${b.x} ${b.y}`}
+                  fill="none"
+                  stroke={EDGE_STROKE[e.drawKind] ?? "#8895aa"}
+                  strokeWidth={1.6}
+                  strokeDasharray={e.drawKind === "governs" ? "4 3" : undefined}
+                  opacity={0.75}
+                />
+              );
+            })}
+
+          {/* The device at the centre: what every one of these documents is about. */}
+          <g>
+            <circle
+              cx={layout.cx}
+              cy={layout.cy}
+              r={CENTER_R}
+              fill="#2d5f8a"
+              stroke="#24506f"
+              strokeWidth={1.5}
+            />
+            <text x={layout.cx} y={layout.cy - 4} textAnchor="middle" className="gm-center">
+              {risk ? risk.device.split(" ")[0] : "Documents"}
+            </text>
+            <text x={layout.cx} y={layout.cy + 13} textAnchor="middle" className="gm-center-sub">
+              {risk ? risk.clearanceId : `${graph.nodes.length} nodes`}
+            </text>
+          </g>
+
+          {layout.hubs.map((h) => (
+            <g key={`hub-${h.lane}`}>
+              <circle cx={h.x} cy={h.y} r={LANE_R} fill="#7ba3cc" stroke="#4a6fa5" strokeWidth={1.4} />
+              <text x={h.x} y={h.y - 2} textAnchor="middle" className="gm-hub">
+                {LANE_LABEL[h.lane].split(" ")[0]}
+              </text>
+              <text x={h.x} y={h.y + 11} textAnchor="middle" className="gm-hub-sub">
+                {h.count}
+              </text>
+            </g>
+          ))}
 
           {[...layout.positioned.values()].map((n) => {
             const ghost = n.kind === "proposed";
@@ -389,49 +460,62 @@ export function GraphMap({
               n.kind === "document" && n.worstSeverity
                 ? SEV_STROKE[n.worstSeverity]!
                 : KIND_STROKE[n.kind]!;
+
+            // The label sits on the outward side, so it never crosses the ring.
+            const cos = Math.cos(n.angle);
+            const sin = Math.sin(n.angle);
+            const anchor = cos > 0.15 ? "start" : cos < -0.15 ? "end" : "middle";
+            const lx =
+              anchor === "start"
+                ? n.x + LEAF_R + LABEL_GAP
+                : anchor === "end"
+                  ? n.x - LEAF_R - LABEL_GAP
+                  : n.x;
+            const ly =
+              anchor === "middle" ? (sin > 0 ? n.y + LEAF_R + 15 : n.y - LEAF_R - 7) : n.y + 4;
+            const label = n.label.length > 20 ? `${n.label.slice(0, 19)}…` : n.label;
+
             return (
               <g
                 key={n.nodeId}
-                transform={`translate(${n.x},${n.y})`}
-                opacity={isDim(n.nodeId) ? 0.25 : 1}
+                opacity={isDim(n.nodeId) ? 0.22 : 1}
                 onClick={() => select(n.nodeId === selected ? null : n.nodeId)}
                 style={{ cursor: "pointer" }}
               >
-                <rect
-                  width={NODE_W}
-                  height={NODE_H}
-                  rx={6}
+                <circle
+                  cx={n.x}
+                  cy={n.y}
+                  r={n.nodeId === selected ? LEAF_R + 3 : LEAF_R}
                   fill={fill}
-                  fillOpacity={ghost ? 0.5 : 1}
                   stroke={n.nodeId === selected ? "#2d5f8a" : stroke}
-                  strokeWidth={n.nodeId === selected ? 2.4 : 1.2}
-                  strokeDasharray={ghost ? "5 4" : undefined}
+                  strokeWidth={n.nodeId === selected ? 2.6 : 1.4}
+                  strokeDasharray={ghost ? "4 3" : undefined}
                 />
-                <text x={10} y={19} className="gm-label">
-                  {n.label.length > 24 ? `${n.label.slice(0, 23)}…` : n.label}
-                </text>
-                <text x={10} y={34} className="gm-sub">
-                  {n.sublabel.length > 26 ? `${n.sublabel.slice(0, 25)}…` : n.sublabel}
-                </text>
-                {/* Risk badge: the change ledger's score, on the map. */}
+                {/* The risk score sits inside the node; the gap count rides the
+                    node's edge, so a glance finds both without a legend. */}
                 {n.risk && (
-                  <g transform={`translate(${NODE_W - 34},8)`}>
-                    <rect width={26} height={16} rx={3} fill="#fff" stroke={stroke} strokeWidth={1} />
-                    <text x={13} y={12} textAnchor="middle" className="gm-risk-badge">
-                      {n.risk.score}
-                    </text>
-                  </g>
-                )}
-                {n.risk && n.risk.gapCount > 0 && (
-                  <text x={NODE_W - 8} y={38} textAnchor="end" className="gm-gapcount">
-                    ▲ {n.risk.gapCount}
+                  <text x={n.x} y={n.y + 4} textAnchor="middle" className="gm-risk-badge">
+                    {n.risk.score}
                   </text>
                 )}
-                {n.kind === "document" && n.findingCount > 0 && (
-                  <text x={NODE_W - 8} y={19} textAnchor="end" className="gm-sub">
+                {!n.risk && n.kind === "document" && n.findingCount > 0 && (
+                  <text x={n.x} y={n.y + 4} textAnchor="middle" className="gm-leaf-count">
                     {n.findingCount}
                   </text>
                 )}
+                {n.risk && n.risk.gapCount > 0 && (
+                  <text
+                    x={n.x + LEAF_R - 2}
+                    y={n.y - LEAF_R + 4}
+                    textAnchor="middle"
+                    className="gm-gapcount"
+                  >
+                    ▲
+                  </text>
+                )}
+                <text x={lx} y={ly} textAnchor={anchor} className="gm-label">
+                  {label}
+                </text>
               </g>
             );
           })}
