@@ -144,6 +144,20 @@ function daysSince(iso: string | null): number | null {
   return Number.isFinite(ms) ? Math.floor(ms / 86_400_000) : null;
 }
 
+/** A quiet stand-in shaped like the ledger, so loading does not move the page. */
+function LedgerSkeleton() {
+  return (
+    <div className="ledger-skeleton" aria-busy="true" aria-label="Loading the change ledger">
+      <div className="sk-block sk-gauge" />
+      <div className="sk-board">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="sk-block sk-col" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ChangeLedger({
   target,
   onNavigate,
@@ -160,6 +174,15 @@ export function ChangeLedger({
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openChange, setOpenChange] = useState<string | null>(target);
+  /**
+   * Whether the first baselines fetch has settled.
+   *
+   * Without this the empty initial state is indistinguishable from "this
+   * project has no baseline", so every visit flashed the full setup form
+   * before replacing it — the first of three layouts this screen used to render
+   * on the way to its real one.
+   */
+  const [loaded, setLoaded] = useState(false);
 
   // A link into Changes names a change; follow it when the address changes.
   useEffect(() => {
@@ -183,6 +206,8 @@ export function ChangeLedger({
       setSelected((cur) => cur ?? (list.find((b) => !b.supersededBy) ?? list[0])?.baselineId ?? null);
     } catch (e) {
       fail(e);
+    } finally {
+      setLoaded(true);
     }
   }, [fail]);
 
@@ -220,6 +245,17 @@ export function ChangeLedger({
     }
     return m;
   }, [assessment]);
+
+  // The skeleton mirrors the real layout — a gauge band over a five-column
+  // board — so the resolved content lands in the space already reserved for it
+  // instead of the page collapsing and then springing open.
+  if (!loaded) {
+    return (
+      <div className="ledger">
+        <LedgerSkeleton />
+      </div>
+    );
+  }
 
   if (baselines.length === 0) {
     return (
@@ -262,8 +298,10 @@ export function ChangeLedger({
         </div>
       )}
 
+      {!assessment && !staleApi && <LedgerSkeleton />}
+
       {assessment && !staleApi && (
-        <>
+        <div className="ledger-fade">
           <RiskGauge assessment={assessment} onThresholdSaved={reload} onError={fail} />
 
           <StageBoard
@@ -306,7 +344,7 @@ export function ChangeLedger({
             determine whether a change requires a new submission — that is the
             manufacturer's call under 21 CFR 807.81(a)(3), recorded per change above.
           </p>
-        </>
+        </div>
       )}
     </div>
   );

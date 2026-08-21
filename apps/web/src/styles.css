@@ -1819,6 +1819,80 @@ body {
   min-width: 0;
 }
 
+/* Loading state.
+ *
+ * Shaped like the ledger rather than a spinner, so the real content lands in
+ * space already reserved for it. The screen used to render three layouts on the
+ * way to its first paint — the setup form, then a bare selector, then the
+ * ledger — which read as a glitch. */
+.ledger-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sk-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  animation: sk-pulse 1.5s ease-in-out infinite;
+}
+
+/* Heights measured against the real gauge and board rather than guessed —
+   a skeleton that is the wrong size just moves the jump rather than removing
+   it. The board grows with the number of change cards, so this matches a
+   typical ledger rather than every one. */
+.sk-gauge {
+  height: 237px;
+  border-radius: 8px;
+}
+
+/* Deliberately does NOT wrap the way the real board does. A placeholder that
+   reflows into three rows on a narrow screen is taller than the content it
+   stands in for, which turns the load into a downward jump instead of removing
+   it. Five thin columns at any width keeps its height constant and predictable. */
+.sk-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sk-col {
+  height: 309px;
+  border-radius: 6px;
+}
+
+@keyframes sk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* The resolved ledger eases in rather than snapping. Short enough not to feel
+   like a delay, long enough that the swap is not a jump-cut. */
+.ledger-fade {
+  animation: ledger-in 180ms ease-out;
+}
+
+@keyframes ledger-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-block,
+  .ledger-fade {
+    animation: none;
+  }
+}
+
 .ledger-bar {
   margin-bottom: 14px;
 }
