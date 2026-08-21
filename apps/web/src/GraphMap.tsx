@@ -168,6 +168,25 @@ export function GraphMap({
 
   if (error) return <div className="error">{error}</div>;
   if (!graph || !layout) return <div className="empty-state muted">Loading map…</div>;
+
+  /**
+   * An API running older code than this tab returns the previous graph shape —
+   * nodes keyed by `recordId` with no `nodeId`, no `lane`, and no `issues` — and
+   * every surface below reads fields that are then undefined. The tsx dev server
+   * does not reload server code, so this is the single most likely way this
+   * screen breaks; say which thing to restart rather than rendering an empty
+   * canvas or throwing.
+   */
+  if (graph.nodes.length > 0 && graph.nodes[0]?.nodeId === undefined) {
+    return (
+      <div className="error">
+        This API is running an older build: it returned documents without lanes or
+        node ids, which this map cannot draw. Restart the API server — the tsx dev
+        server does not reload server code on edit (<code>npm run dev:server</code>).
+      </div>
+    );
+  }
+
   if (graph.nodes.length === 0) {
     return (
       <div className="empty-state">
@@ -212,8 +231,11 @@ export function GraphMap({
     "unreviewed",
     "stale_review",
   ];
+  // Tolerate an API that predates record-level issues: an absent list means
+  // "none reported", which degrades the panel rather than the whole map.
+  const issues: GraphIssue[] = graph.issues ?? [];
   const byKind = new Map<GraphIssueKind, GraphIssue[]>();
-  for (const i of graph.issues) {
+  for (const i of issues) {
     if (!byKind.has(i.kind)) byKind.set(i.kind, []);
     byKind.get(i.kind)!.push(i);
   }
@@ -224,8 +246,8 @@ export function GraphMap({
         <span className="muted">
           {graph.nodes.filter((n) => n.kind === "document").length} documents ·{" "}
           {graph.edges.filter((e) => e.dstNodeId).length} references
-          {graph.danglingRefs.length > 0 && (
-            <> · <strong className="gm-broken">{graph.danglingRefs.length} broken</strong></>
+          {(graph.danglingRefs?.length ?? 0) > 0 && (
+            <> · <strong className="gm-broken">{graph.danglingRefs!.length} broken</strong></>
           )}
           {risk && risk.owedDocuments > 0 && (
             <> · <strong className="gm-broken">{risk.owedDocuments} document(s) owed</strong></>
@@ -254,12 +276,12 @@ export function GraphMap({
       {/* Problems with the RECORD, not inside a document: broken references,
           documents a change owes, orphans, and gaps in review coverage. All
           deterministic, none carrying a severity tier — they are not findings. */}
-      {graph.issues.length > 0 && (
+      {issues.length > 0 && (
         <div className="gm-issues">
           <button className="gm-issues-toggle" onClick={() => setShowIssues((v) => !v)}>
             <span className="rc-chevron">{showIssues ? "▾" : "▸"}</span>
             <span className="gm-issues-count">
-              {graph.issues.length} issue{graph.issues.length === 1 ? "" : "s"} with the record
+              {issues.length} issue{issues.length === 1 ? "" : "s"} with the record
             </span>
             <span className="gm-issues-sum">
               {issueOrder
