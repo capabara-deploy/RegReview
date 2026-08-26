@@ -253,10 +253,16 @@ npm run dev:server / dev:web  # run the app locally (see §6 for the DNS preload
 
 ## 9. Open / next work
 
-- **Build one exhaustive eval fixture** so precision becomes measurable — the
-  corpus is broad and current, but whether it makes reviews *better* is unmeasured.
-  This is the single highest-value next step and everything measurement-related
-  gates on it.
+- ~~Build one exhaustive eval fixture~~ **DONE (2026-08-21).** Precision is now a
+  real number. The blocker was definitional: a CAPA loads 62 rules and 36 come
+  from a seeded sample SOP, so "exhaustive" measured the environment. Fixtures
+  now declare a `ruleScope` (required by the schema when `exhaustive: true`), and
+  `capa-002-display-blanking` is the first one — recall 89%/78%, **precision
+  100%/78%**, 0% on the keyword baseline. Note `packages/eval` had never been
+  typechecked (three latent errors); it is in the root build now.
+  Next eval work: a second exhaustive fixture of a different record type, and
+  the one open miss — `extent-of-action` (disproportionate response) is not
+  detected.
 - Label design/change fixtures so the new (design/device/change) rules get exercised.
 - The **project selector** is scaffolding — it doesn't filter yet (one project). Wire
   it to filter records/graph/ledger when a second project exists.

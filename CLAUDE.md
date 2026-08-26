@@ -88,10 +88,24 @@ consistency pass caches facts under a FK to `records`). Precision is counted
 **only** on fixtures marked `exhaustive: true` — a fixture that labels the
 planted defects but not every real finding must stay `exhaustive: false`, or the
 engine's genuine unlabeled findings count as false positives and the precision
-number lies. The first real run: recall 80% defect / 60% rule. There is not yet
-an exhaustive fixture, so there is not yet a precision gate — building one
-(and deciding how the sample-SOP conformance pass participates) is the next eval
-task.
+number lies.
+
+**`ruleScope` is what makes `exhaustive` checkable, and the schema requires it.**
+A CAPA review loads 62 rules here and 36 come from whichever sample SOP is
+seeded, so an unscoped exhaustive claim measures the environment, not the engine.
+A scoped fixture declares the rules it enumerates defects against and is reviewed
+against exactly those; a scope naming a rule that no longer loads is a hard
+error, never a quietly smaller denominator. That is also the answer to "how does
+the sample-SOP conformance pass participate": it does not, unless a fixture
+names it.
+
+Fixtures: `capa-001` is recall-only (`exhaustive: false`, deliberately — the
+engine finds real conformance defects it does not label). `capa-002-display-blanking`
+is the precision fixture: short, no related documents, nine labels over eight
+rules, two distractors. Measured on claude-opus-4-8/p2 — **recall 89% defect /
+78% rule-attributed, precision 100% / 78%**, and 0% on the keyword baseline, so
+the number is signal rather than pattern matching. Read the precision narrowly:
+nine predictions on one document, not a claim about the engine.
 
 ## Things that will bite you
 
