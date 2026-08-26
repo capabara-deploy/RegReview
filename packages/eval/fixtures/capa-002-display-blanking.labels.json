@@ -1,0 +1,104 @@
+{
+  "id": "capa-002-display-blanking",
+  "title": "CAPA-2026-0188 — Intermittent display blanking, SP-200 (exhaustive)",
+  "recordType": "capa",
+  "exhaustive": true,
+  "ruleScope": {
+    "ruleIds": [
+      "iso13485-8.5.2-investigation",
+      "iso13485-8.5.2-extent-of-action",
+      "iso13485-8.5.2-verification-effectiveness",
+      "iso13485-8.5.3-preventive-action",
+      "regreview-capa-closure-integrity",
+      "regreview-logic-conclusion-supported",
+      "regreview-logic-internal-contradiction",
+      "regreview-logic-evidence-locatable"
+    ]
+  },
+  "related": [],
+  "notes": "The precision fixture. Everything about it is shaped to make `exhaustive: true` an honest claim rather than an aspiration.\n\nWHY IT IS SHORT AND STANDALONE. Exhaustiveness means every defect the scoped rules can find is labeled. That is only achievable on a document small enough to enumerate, so this CAPA is deliberately plain: one failure mode, one cause, one action set. It also declares NO related documents, because the consistency pass diffs facts across documents and would otherwise produce genuine findings this file cannot anticipate — each of which would score as a false positive and understate precision.\n\nWHY IT DECLARES A RULE SCOPE. A CAPA review loads 62 rules on this corpus and 36 of them come from whichever sample SOP happens to be seeded, so the set of findings the document *should* produce moves with the database. Precision against a moving denominator is a number that looks real and is wrong. The eight rules below are the ones this file is labeled against, and the harness reviews it against exactly those. Nine labels across eight rules — closure-integrity is violated twice, in two different sentences.\n\nWHY ONE DEFECT PER RULE. The scorer matches by span overlap, so two labels on the same sentence can both be satisfied by a single prediction, which inflates recall and muddies precision. Every label here anchors to a distinct sentence.\n\nTHE TWO DISTRACTORS are the failures that would cost most credibility with a reviewer: a properly identified reference (traps the evidence-locatable rule) and a candidate cause that was excluded *with* evidence (traps the investigation rule). A prediction landing on either is reported separately by the scorer.\n\nIf the engine finds something real here that is not labeled, the fixture is wrong, not the engine — add the label rather than lowering the bar.\n\nLABEL ADDED AFTER THE FIRST REAL RUN. The engine flagged the post-closure rework date in section 6 under the closure-integrity rule. That scored as a false positive against the original labels, which anchored closure-integrity only to section 8 — but the finding is correct, and this file's own rationale for the section 8 label already described the section 6 date as part of the same problem. Two sentences, two defects, one rule; both are now labeled. Recorded here because adding a label after seeing a run is exactly the move that quietly turns a benchmark into a mirror, and the justification has to be that the defect is real, not that the number improved.",
+  "distractors": [
+    {
+      "anchor": "are recorded in TR-2026-118 rev B",
+      "why": "A properly identified reference: document number and revision, so the evidence is locatable. Flagging this would be a false positive on regreview-logic-evidence-locatable."
+    },
+    {
+      "anchor": "Supply-rail ripple was evaluated and excluded",
+      "why": "A candidate cause ruled out correctly — with a stated method (rail measurements across the load range), a sample (twelve returned units), and a locatable record. Flagging this would be a false positive on the investigation rule."
+    }
+  ],
+  "expected": [
+    {
+      "ruleId": "iso13485-8.5.2-investigation",
+      "anchor": "The cause was determined to be a marginal solder joint at display ribbon\nconnector J4.",
+      "why": "The root cause is asserted, not investigated. No method, no supporting measurement, no sample, and no explanation of how a solder joint was distinguished from the firmware timing path that drives the same display. Contrast the ripple paragraph immediately below, which does this correctly.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "iso13485-8.5.2-extent-of-action",
+      "anchor": "The operator at that station was retrained on the revised profile.",
+      "why": "The action is not proportionate to the effect. 41 reports across roughly 1,900 units in service, and the response is a production-line profile change plus retraining one operator — addressing future build only, with nothing for the installed base.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-internal-contradiction",
+      "anchor": "No field action was required, as units already in service are unaffected.",
+      "why": "Section 6 records that twenty-two returned units were reworked and returned to service. The record both asserts no field action was required and documents field rework.",
+      "category": "plausibility",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "iso13485-8.5.2-verification-effectiveness",
+      "anchor": "Effectiveness was verified by the absence of further service reports during the\nthirty days following closure.",
+      "why": "No acceptance criterion was defined before the action, and absence of reports is not objective evidence of effectiveness — the original signal took seven weeks to accumulate 41 reports, so a thirty-day quiet window is shorter than the interval that produced the problem.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "regreview-logic-conclusion-supported",
+      "anchor": "considered fully effective across the installed base",
+      "why": "The conclusion generalises from a thirty-day absence of reports to the entire installed base, when the action changed only new production. The evidence presented cannot support a claim about units that were never touched.",
+      "category": "plausibility",
+      "severity": "high",
+      "difficulty": "hard"
+    },
+    {
+      "ruleId": "iso13485-8.5.3-preventive-action",
+      "anchor": "Preventive action: not applicable.",
+      "why": "Declared not applicable with no evaluation. The same reflow profile and the same connector family are used on other products, so whether the potential nonconformity exists elsewhere is a question the record does not ask.",
+      "category": "compliance",
+      "severity": "medium",
+      "difficulty": "easy"
+    },
+    {
+      "ruleId": "regreview-capa-closure-integrity",
+      "anchor": "The record was closed on 2026-03-27 with action item 3 still open.",
+      "why": "Closed with an action item outstanding, and the field rework in section 6 is dated 2026-04-10 — two weeks after closure. The record was closed before its own actions were complete.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "easy"
+    },
+    {
+      "ruleId": "regreview-logic-evidence-locatable",
+      "anchor": "Results achieved were recorded in the engineering file.",
+      "why": "\"The engineering file\" carries no identifier, revision or location, so the results cannot be retrieved by anyone reading this record. Contrast TR-2026-118 rev B in section 2.",
+      "category": "compliance",
+      "severity": "medium",
+      "difficulty": "easy"
+    },
+    {
+      "ruleId": "regreview-capa-closure-integrity",
+      "anchor": "Rework of the twenty-two units returned under warranty was completed on\n2026-04-10",
+      "why": "A field disposition activity is dated 2026-04-10, two weeks after the record's stated closure date of 2026-03-27. Work performed after closure was never covered by the closure decision. Labeled separately from the open-action-item defect in section 8: same rule, different sentence, and the record is defective in both places.",
+      "category": "compliance",
+      "severity": "high",
+      "difficulty": "hard"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import type { Finding } from "@regreview/core";
-import type { LoadedFixture, ResolvedLabel } from "./loadFixtures.js";
+import type { LoadedFixture } from "./loadFixtures.js";
+import type { ResolvedLabel } from "./types.js";
 
 /**
  * Score predicted findings against a fixture's labels.

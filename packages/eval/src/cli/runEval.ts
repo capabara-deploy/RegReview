@@ -40,7 +40,9 @@ interface Args {
   real: boolean;
   samples: number;
   repeat: number;
-  fixture?: string;
+  // `| undefined` because exactOptionalPropertyTypes distinguishes "absent"
+  // from "present and undefined", and parseArgs always supplies the key.
+  fixture?: string | undefined;
   minPrecision: number;
   minAgreement: number;
   json: boolean;
@@ -63,13 +65,49 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
+/**
+ * Narrow a record type's rules to what a fixture declares it is labeled against.
+ *
+ * An unscoped fixture is reviewed against everything, which is right for a
+ * recall-only fixture. A scoped one is reviewed against exactly its allowlist,
+ * which is what makes an `exhaustive` claim checkable: on this corpus a CAPA
+ * loads 62 rules and 36 come from whichever sample SOP is seeded, so without
+ * scoping the set of findings a document *should* produce moves with the
+ * database and precision measures the environment rather than the engine.
+ */
+function scopeRules<R extends { ruleId: string; source: string }>(
+  rules: R[],
+  fixture: LoadedFixture,
+): R[] {
+  const scope = fixture.meta.ruleScope;
+  if (!scope) return rules;
+  const sources = new Set(scope.sources ?? []);
+  const ids = new Set(scope.ruleIds ?? []);
+  const scoped = rules.filter((r) => sources.has(r.source) || ids.has(r.ruleId));
+
+  // A scope naming a rule that no longer loads would silently shrink the
+  // denominator — the fixture would look cleaner because less was checked.
+  const missing = [...ids].filter((id) => !rules.some((r) => r.ruleId === id));
+  if (missing.length > 0) {
+    throw new Error(
+      `${fixture.meta.id}: ruleScope names ${missing.length} rule id(s) that do not load ` +
+        `for record type "${fixture.record.recordType}": ${missing.join(", ")}. ` +
+        `A scope that silently drops rules makes the fixture look cleaner than it is.`,
+    );
+  }
+  if (scoped.length === 0) {
+    throw new Error(`${fixture.meta.id}: ruleScope matched no rules.`);
+  }
+  return scoped;
+}
+
 /** One engine pass over a fixture, without persisting a RUN or its findings. */
 async function reviewOnce(
   engine: ReviewEngine,
   fixture: LoadedFixture,
   rulesByType: Map<string, Awaited<ReturnType<typeof loadRulesFor>>>,
 ): Promise<Finding[]> {
-  const rules = rulesByType.get(fixture.record.recordType)!;
+  const rules = scopeRules(rulesByType.get(fixture.record.recordType)!, fixture);
   const result = await engine.review({
     runId: `eval-${fixture.meta.id}-${randomUUID().slice(0, 8)}`,
     record: fixture.record,

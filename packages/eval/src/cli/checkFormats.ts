@@ -35,7 +35,9 @@ async function check(path: string): Promise<CheckResult> {
     notes.push(`FAIL ${m}`);
     ok = false;
   };
-  const pass = (m: string): void => notes.push(`ok   ${m}`);
+  const pass = (m: string): void => {
+    notes.push(`ok   ${m}`);
+  };
 
   const extracted = await extractRecord({ path, recordType: "capa" });
   const { record, blocks } = extracted;

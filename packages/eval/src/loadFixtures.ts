@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { existsSync, readdirSync } from "node:fs";
 import { extractRecord, type Block, type RecordDoc } from "@regreview/core";
-import { FixtureMeta, type Fixture, type ResolvedLabel } from "./types.js";
+import { FixtureMetaChecked, type Fixture, type ResolvedLabel } from "./types.js";
 
 /**
  * Load evaluation fixtures.
@@ -92,7 +92,7 @@ export async function loadFixture(
   }
 
   const rawLabels: unknown = JSON.parse(await readFile(labelsPath, "utf8"));
-  const parsed = FixtureMeta.safeParse(rawLabels);
+  const parsed = FixtureMetaChecked.safeParse(rawLabels);
   if (!parsed.success) {
     throw new Error(
       `invalid label file ${basename(labelsPath)}:\n  ${parsed.error.issues
