@@ -39,6 +39,34 @@ export const ExpectedFinding = z.object({
 });
 export type ExpectedFinding = z.infer<typeof ExpectedFinding>;
 
+/**
+ * The rules a fixture is labeled against.
+ *
+ * This exists because "exhaustive" is otherwise not a well-defined claim. A CAPA
+ * review loads 62 rules on this corpus and 36 of them come from whichever sample
+ * SOP happens to be seeded in the environment — so the set of findings a
+ * document *should* produce moves with the database, and no hand-labeled file
+ * can enumerate it. Precision computed against a moving denominator is a number
+ * that looks real and is wrong, which is worse than no number at all.
+ *
+ * A scope pins it down: this fixture claims to enumerate every defect *against
+ * these requirements*, and the harness reviews it against exactly those. Both
+ * fields are allowlists and they union; omit the scope entirely to review
+ * against every rule for the record type, which is the right default for a
+ * recall-only fixture.
+ */
+export const RuleScope = z
+  .object({
+    /** Rule sources to include, e.g. ["iso_clause", "logic"]. */
+    sources: z.array(z.string().min(1)).min(1).optional(),
+    /** Explicit rule ids to include. The tightest and most defensible form. */
+    ruleIds: z.array(z.string().min(1)).min(1).optional(),
+  })
+  .refine((v) => v.sources !== undefined || v.ruleIds !== undefined, {
+    message: "ruleScope must name at least one of `sources` or `ruleIds`",
+  });
+export type RuleScope = z.infer<typeof RuleScope>;
+
 export const FixtureMeta = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -51,8 +79,12 @@ export const FixtureMeta = z.object({
    * real defect we simply did not annotate, and punishing the engine for
    * finding it would train the corpus toward missing things. Only exhaustively
    * labeled fixtures contribute to precision.
+   *
+   * Requires `ruleScope` — see there for why an unscoped exhaustive claim is
+   * not checkable.
    */
   exhaustive: z.boolean(),
+  ruleScope: RuleScope.optional(),
   /**
    * Deliberate traps: text that pattern-matches to a problem but is actually
    * correct. Named here so a false positive on one can be reported distinctly —
@@ -69,6 +101,28 @@ export const FixtureMeta = z.object({
   notes: z.string().optional(),
 });
 export type FixtureMeta = z.infer<typeof FixtureMeta>;
+
+/**
+ * Parse a fixture's metadata, enforcing the one cross-field invariant:
+ * an exhaustive fixture must declare the rules it is exhaustive against.
+ *
+ * Enforced at load rather than by convention because the failure is silent —
+ * an unscoped `exhaustive: true` produces a precision number computed against
+ * whatever rules the environment happened to load, which reads as real.
+ */
+export const FixtureMetaChecked = FixtureMeta.superRefine((m, ctx) => {
+  if (m.exhaustive && !m.ruleScope) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ruleScope"],
+      message:
+        "a fixture marked exhaustive must declare `ruleScope`. Without one, " +
+        "precision is computed against every rule the environment happens to " +
+        "load — including seeded sample SOPs — so the number moves with the " +
+        "database rather than with the engine.",
+    });
+  }
+});
 
 /** A loaded fixture: metadata, the document text, and resolved label offsets. */
 export interface Fixture {

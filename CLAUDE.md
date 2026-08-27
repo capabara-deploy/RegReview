@@ -23,8 +23,8 @@ Monorepo, npm workspaces, `tsc -b` project references, ESM throughout, Node 22+.
 packages/core/     rule corpus, extraction, review engine, Claude calls, severity, CLIs,
                    and the Postgres layer (pg + the *Schema.sql files live here, not in the server)
 packages/corpus/   one-time/refreshable ingest CLIs (FDA data, CFR, authored rules) — no runtime dep
-packages/eval/     fixtures + the fixture schema; the harness itself is not built (see below)
-apps/server/       Fastify; the only process that holds an API key. Reaches Postgres through core,
+packages/eval/     fixtures + labels + the harness (loadFixtures / score / runEval)
+apps/server/       Express; the only process that holds an API key. Reaches Postgres through core,
                    and owns the MongoDB side (reviewer accounts, sessions, hourly quota)
 apps/web/          Vite + React + TS reviewer UI, served as a separate origin from the API
 ```
@@ -40,6 +40,23 @@ Two different stores, for two different reasons:
 
 **A foreign key no longer protects findings from rule deletion.** `findings.rule_id` lives in `customer` and `rules` lives in `sops`; Postgres cannot enforce a constraint across databases. The explicit "is this rule still referenced" check in `ingestSop` is now the only thing preventing an orphaned finding. Don't remove it as redundant.
 
+## Cumulative change ledger and cross-document graph
+
+Two subsystems added for the advisor roadmap (see `docs/roadmap/execution-plan.md`). Both are deliberately **deterministic** and both have a constraint that is load-bearing, not incidental:
+
+- **Change ledger** (`changeLedger.ts` / `changeStore.ts` / `changeScorer.ts`, tables `baselines` / `changes` / `change_gaps` / `submissions`). It flags gaps in change assessments (wrong comparator vs the cleared 510(k) — "GP7"; missing aggregate assessment — "GP6") and lists which decision-flowchart branches a change *type* raises. **It must never render a submit / don't-submit determination** — that is the manufacturer's statutory call (21 CFR 807.81(a)(3)) and the highest-liability string this product could emit. `changes.determination` is written **only** by `setDetermination`, from a human; nothing computes it. Model inferences about a proposed change go in `change_gaps` with `origin='inferred'`, never in `findings` — a typed change has no controlled-document text to quote, so it is not protected by the hallucination guard and carries no severity.
+
+  It also replaces what companies actually do today — a spreadsheet of 1–10 risk scores with a running total and a threshold. Four things make that honest rather than a nicer spreadsheet, and each is load-bearing:
+
+  - **Risk is pooled by workflow stage.** `Stage` is `proposed → implemented → documented → in_submission → cleared`. Exposure is `implemented` (in the product, no controlled document) **plus** `documented` (written up, not yet filed) — the two middle stages only. `proposed` is carried separately as `pipeline` (a forecast, not exposure); `cleared`/`superseded` are excluded. Keep those boundaries: counting `proposed` as exposure overstates today, and dropping it entirely throws away the only predictive thing the ledger knows.
+  - **Every score has a deterministic floor** (`SCORE_FLOORS`, from the change type's FDA flowchart branch). `effectiveScore()` clamps any score up to the floor, with exactly one escape hatch: a human who writes `belowFloorRationale` may go under it, because that is the rebuttal the guidance itself provides. A *model* never can. Unscored changes resolve to their floor, never to zero — zero would let an untouched ledger read as "no exposure", the most dangerous way this number could be wrong.
+  - **`changeScorer.ts` writes only `suggested_score`.** It is the one place a model output is not protected by the hallucination guard (there is no document to quote), so three things substitute: it cannot write `score`, the floor clamps it, and its prompt forbids any statement about whether a submission is required. `pools.unconfirmed` reports how much of the headline total rests on unconfirmed suggestions, and the UI must keep showing it.
+  - **The escalation is a conformance finding against the customer's own SOP, not FDA advice.** `baselines.threshold` / `threshold_source` are *theirs*, cited (e.g. "QSP-0031 §5.4"). Crossing it says "your procedure requires a determination and none has been made". Do not let that message drift toward "submit a 510(k)" — the distinction is the entire reason this feature is shippable.
+
+  `clearSubmission()` closes the loop: recording a clearance retires the changes it carried, mints a **successor baseline** carrying the threshold forward, and links the old one via `superseded_by`. That is the step every real-world change spreadsheet gets wrong, and why theirs drift until nobody trusts them — accumulation must restart against the *new* clearance number, not zero a counter while later changes still compare to the original.
+
+- **Cross-document graph** (`graph.ts` / `graphStore.ts`). The map draws what the record *should* contain, not only what it holds: alongside documents it carries every active **change** (propositions lane), the document each undocumented change **owes** (`kind: 'proposed'` — dashed, no doc id, no findings, no severity, because it is not a document), and each **submission**. The change ledger's accumulated risk rides on the nodes (`NodeRisk`) and in the header (`GraphRisk`), reporting the customer's threshold — never a submission verdict. Nodes get a `lane` from their role and the seven `EdgeKind`s collapse to three `DrawKind`s for drawing only; layout is deterministic (lane by role, order by label, no force simulation) so the same corpus always draws the same picture, which is what lets a screenshot go into an audit response. `deriveIssues()` adds record-level problems that no single document can show — broken references, owed documents, orphans, never-reviewed and stale-corpus documents. These are **not findings**: deterministic, no severity, and styled deliberately unlike findings so they cannot be mistaken for them. Reference edges are extracted deterministically (a document id appearing in another document's text), classified by nearby words, and the target is stored *as written* then resolved in a second pass — so "cites a document we don't hold" is an explicit `danglingRefs` output, not a dropped edge. Computed live on read; do not materialize edges until a customer actually has thousands of documents. The shared doc-id vocabulary is `docIdMatcher()` in `extract/text.ts` — widen it there, once, if a new document-id prefix appears.
+
 Workspaces import `@regreview/core` via its **dist output**, so core builds first. `npm run build:core` before anything that depends on it (most scripts already chain this).
 
 ## Common commands (run from repo root)
@@ -53,21 +70,42 @@ npm run ingest:cfr            # CFR Part 820 (legacy QSR + QMSR)
 npm run ingest:rules          # authored ISO-clause + logic rules
 npm run corpus:report         # sanity-check the loaded corpus
 npm run review -- <file>      # review one record from the CLI (--rule ID to scope)
+npm run eval                  # eval harness, offline baseline (free); --real for the model number
+npm run ledger:demo           # seed + print the Northlake cumulative change ledger
+npm run ledger:demo -- --reseed   # rebuild the VP-400 demo rows (deletes + reseeds them)
+npm run graph:demo            # ingest the demo corpus + print the cross-document graph
 npm run dev:server            # start the API + built web UI
 npm run dev:web               # Vite dev server (proxies /api to the server)
 ```
 
 Scripts run with cwd set to the *workspace* dir, but all paths anchor to the repo root (see below), so run these from the root.
 
-**`npm run eval` is declared but does not run.** The script points at
-`packages/eval/src/cli/runEval.ts`, which does not exist on any branch — it
-crashes on invocation. What exists is `src/types.ts`, a complete and well-specced
-fixture schema (`FixtureMeta` / `ExpectedFinding`) that nothing consumes, and six
-unlabeled fixtures. Still missing: `<id>.labels.json` label files, a loader that
-resolves each `anchor` to offsets via core's `normalizeText` and hard-fails on an
-anchor or `ruleId` that no longer resolves, a scorer, and the CLI. Do not cite an
-eval number until this is built — precision is the whole asset with this
-audience, and there is currently no way to measure it.
+**`npm run eval` — the harness exists now.** Runs the engine over labeled
+fixtures (`<id>.labels.json` sidecars) and reports precision/recall. Offline by
+default (keyword baseline, free, CI-safe, no DB writes); `--real` for the model
+number (spends, and persists the fixture + its related docs because the
+consistency pass caches facts under a FK to `records`). Precision is counted
+**only** on fixtures marked `exhaustive: true` — a fixture that labels the
+planted defects but not every real finding must stay `exhaustive: false`, or the
+engine's genuine unlabeled findings count as false positives and the precision
+number lies.
+
+**`ruleScope` is what makes `exhaustive` checkable, and the schema requires it.**
+A CAPA review loads 62 rules here and 36 come from whichever sample SOP is
+seeded, so an unscoped exhaustive claim measures the environment, not the engine.
+A scoped fixture declares the rules it enumerates defects against and is reviewed
+against exactly those; a scope naming a rule that no longer loads is a hard
+error, never a quietly smaller denominator. That is also the answer to "how does
+the sample-SOP conformance pass participate": it does not, unless a fixture
+names it.
+
+Fixtures: `capa-001` is recall-only (`exhaustive: false`, deliberately — the
+engine finds real conformance defects it does not label). `capa-002-display-blanking`
+is the precision fixture: short, no related documents, nine labels over eight
+rules, two distractors. Measured on claude-opus-4-8/p2 — **recall 89% defect /
+78% rule-attributed, precision 100% / 78%**, and 0% on the keyword baseline, so
+the number is signal rather than pattern matching. Read the precision narrowly:
+nine predictions on one document, not a claim about the engine.
 
 ## Things that will bite you
 

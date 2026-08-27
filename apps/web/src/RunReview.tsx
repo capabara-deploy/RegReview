@@ -28,11 +28,131 @@ const RECORD_TYPES: { value: string; label: string }[] = [
   { value: "unknown", label: "Other" },
 ];
 
+/** Sentence-case a lowercase engine value (a check phase or pass name). */
+function sentence(v: string): string {
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+/**
+ * Display label for a record type.
+ *
+ * Six call sites were each doing `value.replace(/_/g, " ")`, which renders
+ * "risk_analysis" as "risk analysis" while the picker beside it shows
+ * "Risk analysis / RMF" — the same type under two names on one screen. The
+ * fallback stays for a type stored before it was in RECORD_TYPES.
+ */
+function recordTypeLabel(value: string): string {
+  return RECORD_TYPES.find((t) => t.value === value)?.label ?? value.replace(/_/g, " ");
+}
+
+/**
+ * The two row actions, as matched icons.
+ *
+ * They were the text glyphs "⟳" and "×", which take whatever weight and
+ * baseline the system font gives them — next to each other they looked like
+ * stray characters at two different sizes rather than a pair of controls.
+ * Drawn instead at a shared 1.6 stroke on the same 16-unit grid, in
+ * currentColor so the hover states in CSS still drive them.
+ */
+const iconProps = {
+  width: 14,
+  height: 14,
+  viewBox: "0 0 16 16",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.6,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
+
+/** Upload-into-tray: the action is "put a new file in this document's place". */
+function ReplaceIcon() {
+  return (
+    <svg {...iconProps} aria-hidden="true">
+      <path d="M8 10V2.7" />
+      <path d="M5 5.6 8 2.6l3 3" />
+      <path d="M2.8 10.6v1.9c0 .6.4 1 1 1h8.4c.6 0 1-.4 1-1v-1.9" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg {...iconProps} aria-hidden="true">
+      <path d="M2.8 4.3h10.4" />
+      <path d="M6.4 4.3V3.1c0-.3.2-.5.5-.5h2.2c.3 0 .5.2.5.5v1.2" />
+      <path d="M4.2 4.3l.5 8.1c0 .5.4.9.9.9h4.8c.5 0 .9-.4.9-.9l.5-8.1" />
+      <path d="M6.7 6.7v4.2M9.3 6.7v4.2" />
+    </svg>
+  );
+}
+
 const SOURCE_GROUPS: { key: string; label: string; sources: string[] }[] = [
   { key: "standards", label: "FDA & standards", sources: ["iso_clause", "cfr", "guidance"] },
   { key: "sop", label: "Your procedures", sources: ["sop"] },
   { key: "logic", label: "Logic & soundness", sources: ["logic"] },
 ];
+
+/**
+ * Second-level topics for the standards group.
+ *
+ * The corpus is large enough now (100+ rules) that a flat list is unusable, so
+ * within "FDA & standards" the rules are grouped by regulatory area — a
+ * sub-dropdown per topic. The order is the one a quality reader expects, roughly
+ * the shape of a quality system from CAPA out to device-specific testing.
+ */
+const TOPIC_ORDER = [
+  "CAPA",
+  "Complaints & MDR",
+  "Risk management",
+  "Design controls",
+  "Software, AI & connectivity",
+  "Production & process",
+  "Purchasing & acceptance",
+  "Records, traceability & distribution",
+  "Sterility, materials & biocompatibility",
+  "Physical & electrical safety",
+  "In-vitro diagnostics",
+  "Clinical & postmarket",
+  "Labeling & identification",
+  "Device families",
+  "Other requirements",
+] as const;
+
+/** Map a rule to its topic from its id and citation. Deterministic, no model. */
+function topicFor(rule: { ruleId: string; citation: string }): string {
+  const id = rule.ruleId;
+  const has = (...ps: string[]) => ps.some((p) => id.includes(p));
+
+  if (has("8.5.2", "8.5.3", "regreview-capa")) return "CAPA";
+  if (has("820.198", "-803", "-806", "complaint-source", "complaint-reportability"))
+    return "Complaints & MDR";
+  if (has("iso14971", "risk-rating-consistency", "safety-assurance", "benefit-risk"))
+    return "Risk management";
+  if (
+    has("820.30", "design-plan", "design-input", "human-factors", "change-assessment") &&
+    !has("820.30(i)")
+  )
+    return "Design controls";
+  if (has("software", "-ai-", "samd", "interoperability", "cybersecurity", "820.70i", "pccp", "820.30(i)"))
+    return "Software, AI & connectivity";
+  if (has("820.75", "820.70", "820.72", "820.25", "820.40")) return "Production & process";
+  if (has("820.50", "820.80", "820.90")) return "Purchasing & acceptance";
+  if (has("820.184", "820.181", "820.65", "820.160", "820.170", "820.200"))
+    return "Records, traceability & distribution";
+  if (has("biocompat", "chemical", "steriliz", "packaging", "reprocess", "particulate"))
+    return "Sterility, materials & biocompatibility";
+  if (
+    has("electrical", "wireless", "mr-safety", "mechanical", "alarm", "battery", "fluid-path", "energy-device", "radiation")
+  )
+    return "Physical & electrical safety";
+  if (has("-ivd-")) return "In-vitro diagnostics";
+  if (has("clinical", "-ide-", "postmarket", "real-world")) return "Clinical & postmarket";
+  if (has("-801", "-830", "labeling", "home-use", "pediatric")) return "Labeling & identification";
+  if (has("cardiovascular", "orthopedic", "drug-delivery", "combination", "infusion-pump"))
+    return "Device families";
+  return "Other requirements";
+}
 
 /**
  * Which check passes a rule selection will run. Mirrors `categoriesForRules` in
@@ -81,10 +201,20 @@ export function RunReview({
   const [allRules, setAllRules] = useState<CorpusRule[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showRules, setShowRules] = useState(false);
+  // Which topic sub-dropdowns are expanded, and the rule search box.
+  const [openTopics, setOpenTopics] = useState<Set<string>>(new Set());
+  const [ruleQuery, setRuleQuery] = useState("");
 
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState("capa");
   const fileInput = useRef<HTMLInputElement>(null);
+  // Replace-in-place: a second hidden input whose file targets one record.
+  const replaceInput = useRef<HTMLInputElement>(null);
+  const [replaceTarget, setReplaceTarget] = useState<string | null>(null);
+  // Which document-type sub-dropdowns are collapsed in the picker.
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
+  // Whether the "adjust cross-check targets" dropdown is open.
+  const [showCrossTargets, setShowCrossTargets] = useState(false);
 
   useEffect(() => {
     api
@@ -97,10 +227,14 @@ export function RunReview({
   }, []);
 
   // Default to the most recently touched document so the page is usable on
-  // arrival rather than requiring a selection before anything makes sense.
+  // arrival rather than requiring a selection before anything makes sense, and
+  // default cross-check to comparing against every other document — the common
+  // case, and what the consistency pass is for.
   useEffect(() => {
     if (picked.size === 0 && records.length > 0) {
-      setPicked(new Set([records[0]!.recordId]));
+      const first = records[0]!.recordId;
+      setPicked(new Set([first]));
+      setCrossCheck(new Set(records.filter((r) => r.recordId !== first).map((r) => r.recordId)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records.length]);
@@ -130,6 +264,33 @@ export function RunReview({
   // Only documents not already under review can be cross-check targets: a record
   // compared against itself agrees with itself on everything.
   const unpicked = ordered.filter((r) => !picked.has(r.recordId));
+
+  // Documents grouped by type, in the RECORD_TYPES order, for the collapsible
+  // per-type sub-lists. A type with no documents is omitted.
+  const docGroups = useMemo(() => {
+    const byType = new Map<string, RecordSummary[]>();
+    for (const r of ordered) {
+      if (!byType.has(r.recordType)) byType.set(r.recordType, []);
+      byType.get(r.recordType)!.push(r);
+    }
+    const known = RECORD_TYPES.map((t) => t.value);
+    const order = [...known, ...[...byType.keys()].filter((t) => !known.includes(t))];
+    return order
+      .filter((t) => byType.has(t))
+      .map((t) => ({
+        type: t,
+        label: recordTypeLabel(t),
+        docs: byType.get(t)!,
+      }));
+  }, [ordered]);
+
+  // "Compare to all" makes every other document a cross-check target and also
+  // checks the selected documents against each other; "none" clears both.
+  const setCompareAll = (all: boolean) => {
+    setCrossCheck(all ? new Set(unpicked.map((r) => r.recordId)) : new Set());
+    setCrossCheckSelected(all && pickedRecords.length > 1);
+  };
+  const comparingCount = crossCheck.size + (crossCheckSelected ? pickedRecords.length : 0);
 
   // Rules are filtered to the selected documents' types. With several types
   // picked, a rule is offered if it applies to any of them — the per-document
@@ -190,7 +351,7 @@ export function RunReview({
   const typeLabel =
     types.size === 0
       ? "the selected documents"
-      : `${[...types].map((t) => t.replace(/_/g, " ")).join(" / ")} record${types.size > 1 ? "s" : ""}`;
+      : `${[...types].map(recordTypeLabel).join(" / ")} record${types.size > 1 ? "s" : ""}`;
 
   /**
    * Check passes that will not run, and why.
@@ -286,6 +447,32 @@ export function RunReview({
     [uploadType, onRefreshRecords],
   );
 
+  const onReplace = useCallback(
+    async (recordId: string, file: File) => {
+      setError(null);
+      setNotice(null);
+      setUploading(true);
+      try {
+        const result = await api.replaceRecord(recordId, file);
+        setNotice(
+          result.warning ??
+            `Replaced ${result.filename} — ${result.blocks} blocks` +
+              (result.discardedFindings
+                ? `, ${result.discardedFindings} finding(s) from the old version cleared.`
+                : "."),
+        );
+        await onRefreshRecords();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setUploading(false);
+        setReplaceTarget(null);
+        if (replaceInput.current) replaceInput.current.value = "";
+      }
+    },
+    [onRefreshRecords],
+  );
+
   const onRetype = useCallback(
     async (r: RecordSummary, recordType: string) => {
       setError(null);
@@ -294,7 +481,7 @@ export function RunReview({
         const res = await api.setRecordType(r.recordId, recordType);
         const label = r.docId ?? r.filename;
         const parts = [
-          `${label} is now a ${recordType.replace(/_/g, " ")} record — ` +
+          `${label} is now a ${recordTypeLabel(recordType)} record — ` +
             `${res.applicableRules} rule(s) apply.`,
         ];
         // Past runs were produced under the old type's rules. Saying so matters:
@@ -303,7 +490,7 @@ export function RunReview({
         if (res.priorRuns > 0) {
           parts.push(
             `Its ${res.priorRuns} existing run(s) were done as a ` +
-              `${res.previousType.replace(/_/g, " ")} record and are unchanged — ` +
+              `${recordTypeLabel(res.previousType)} record and are unchanged — ` +
               `re-run to check it against the new rule set.`,
           );
         }
@@ -400,7 +587,7 @@ export function RunReview({
           <h2>Documents to review</h2>
           <div className="rp-head-actions">
             <label className="rp-uploadtype">
-              upload as
+              Upload as
               <select
                 className="rp-type"
                 value={uploadType}
@@ -423,6 +610,16 @@ export function RunReview({
                 if (f) void onUpload(f);
               }}
             />
+            <input
+              ref={replaceInput}
+              type="file"
+              accept=".pdf,.docx,.md,.txt"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f && replaceTarget) void onReplace(replaceTarget, f);
+              }}
+            />
             <button
               className="act accept"
               disabled={uploading}
@@ -437,52 +634,97 @@ export function RunReview({
           <p className="muted">No documents yet. Upload one to get started.</p>
         )}
 
+        {/* Grouped by document type — a collapsible sub-list per type, so a
+            growing project stays navigable and it is obvious what is present. */}
         <div className="doclist">
-          {ordered.map((r) => {
-            const on = picked.has(r.recordId);
+          {docGroups.map((g) => {
+            const collapsed = collapsedTypes.has(g.type);
+            const pickedInType = g.docs.filter((d) => picked.has(d.recordId)).length;
             return (
-              <div key={r.recordId} className={`docrow ${on ? "on" : ""}`}>
-                <label className="docrow-main">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => togglePicked(r.recordId)}
-                  />
-                  <span className="docrow-name">{r.docId ?? r.filename}</span>
-                </label>
-                {/* Editable, not a badge: the type decides which rules apply, and
-                    a document uploaded under the wrong one is reviewed against
-                    the wrong requirements — or against none. */}
-                <select
-                  className="docrow-type"
-                  value={r.recordType}
-                  title="Document type — decides which requirements apply"
-                  onChange={(e) => void onRetype(r, e.target.value)}
-                >
-                  {/* A controlled select whose value is not among its options
-                      displays the first option instead, so the row would claim a
-                      type the document does not have and the next interaction
-                      would silently commit it. Keep an escape hatch for any
-                      record type this list does not know about. */}
-                  {!RECORD_TYPES.some((t) => t.value === r.recordType) && (
-                    <option value={r.recordType}>{r.recordType.replace(/_/g, " ")}</option>
-                  )}
-                  {RECORD_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                <span className="docrow-runs">
-                  {r.runs === 0 ? "never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
-                </span>
-                <button
-                  className="docrow-del"
-                  title="Delete this document and all its findings"
-                  onClick={() => void onDelete(r)}
-                >
-                  ×
-                </button>
+              <div key={g.type} className="doctype-group">
+                <div className="doctype-head">
+                  <button
+                    className="doctype-toggle"
+                    onClick={() =>
+                      setCollapsedTypes((prev) => {
+                        const next = new Set(prev);
+                        next.has(g.type) ? next.delete(g.type) : next.add(g.type);
+                        return next;
+                      })
+                    }
+                  >
+                    <span className="rc-chevron">{collapsed ? "▸" : "▾"}</span>
+                    {g.label}
+                    <span className="rc-badge">
+                      {pickedInType > 0 ? `${pickedInType}/` : ""}
+                      {g.docs.length}
+                    </span>
+                  </button>
+                </div>
+
+                {!collapsed &&
+                  g.docs.map((r) => {
+                    const on = picked.has(r.recordId);
+                    return (
+                      <div key={r.recordId} className={`docrow ${on ? "on" : ""}`}>
+                        <label className="docrow-main">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => togglePicked(r.recordId)}
+                          />
+                          <span className="docrow-name">{r.docId ?? r.filename}</span>
+                        </label>
+                        {/* Editable, not a badge: the type decides which rules
+                            apply, and a document uploaded under the wrong one is
+                            reviewed against the wrong requirements — or none. */}
+                        {/* Fixed-width cell, auto-width select: the column
+                            stays aligned down the list while the native caret
+                            still sits beside its label instead of stranded at
+                            the far edge of a stretched control. */}
+                        <span className="docrow-typecell">
+                        <select
+                          className="docrow-type"
+                          value={r.recordType}
+                          title="Document type — decides which requirements apply"
+                          onChange={(e) => void onRetype(r, e.target.value)}
+                        >
+                          {!RECORD_TYPES.some((t) => t.value === r.recordType) && (
+                            <option value={r.recordType}>
+                              {recordTypeLabel(r.recordType)}
+                            </option>
+                          )}
+                          {RECORD_TYPES.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </select>
+                        </span>
+                        <span className="docrow-runs">
+                          {r.runs === 0 ? "Never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
+                        </span>
+                        <button
+                          className="docrow-replace"
+                          title="Replace this document's file, keeping its place and history slot"
+                          disabled={uploading}
+                          onClick={() => {
+                            setReplaceTarget(r.recordId);
+                            replaceInput.current?.click();
+                          }}
+                        >
+                          <ReplaceIcon />
+                        </button>
+                        <button
+                          className="docrow-del"
+                          title="Delete this document and all its findings"
+                          onClick={() => void onDelete(r)}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    );
+                  })}
               </div>
             );
           })}
@@ -497,64 +739,79 @@ export function RunReview({
         </p>
       </section>
 
-      {/* 2 — cross-check. Available regardless of how many documents are under
-             review: each reviewed document is checked against the same targets. */}
+      {/* 2 — cross-check: compare against all other documents, or none, with a
+             dropdown to deselect individual targets. */}
       {records.length > 1 && (
         <section className="rp-section">
           <div className="rp-head">
-            <h2>Cross-check against</h2>
+            <h2>Cross-check</h2>
             <span className="muted small">
               finds facts that disagree between documents — risk ratings, dates, thresholds
             </span>
           </div>
 
-          {pickedRecords.length > 1 && (
-            <label className="rc-opt rp-eachother">
-              <input
-                type="checkbox"
-                checked={crossCheckSelected}
-                onChange={(e) => setCrossCheckSelected(e.target.checked)}
-              />
-              also check the {pickedRecords.length} selected documents against{" "}
-              <strong>each other</strong>
-              <span className="muted small">
-                {" "}
-                — facts are extracted once per document and cached, so this costs
-                little beyond the first pass
-              </span>
-            </label>
-          )}
-
-          <div className="doclist">
-            {unpicked.length === 0 && (
-              <p className="muted small">
-                Every document is selected for review. Untick one to use it as a
-                cross-check target instead
-                {pickedRecords.length > 1 ? ", or use the option above." : "."}
-              </p>
-            )}
-            {unpicked.map((r) => (
-              <label
-                key={r.recordId}
-                className={`docrow ${crossCheck.has(r.recordId) ? "on" : ""}`}
+          <div className="cross-controls">
+            <div className="seg">
+              <button
+                className={`seg-btn ${comparingCount > 0 ? "on" : ""}`}
+                onClick={() => setCompareAll(true)}
               >
-                <span className="docrow-main">
-                  <input
-                    type="checkbox"
-                    checked={crossCheck.has(r.recordId)}
-                    onChange={() => toggleCross(r.recordId)}
-                  />
-                  <span className="docrow-name">{r.docId ?? r.filename}</span>
-                </span>
-                <span className="docrow-typeflat">{r.recordType.replace(/_/g, " ")}</span>
-              </label>
-            ))}
+                Compare to all
+              </button>
+              <button
+                className={`seg-btn ${comparingCount === 0 ? "on" : ""}`}
+                onClick={() => setCompareAll(false)}
+              >
+                None
+              </button>
+            </div>
+            <span className="muted small">
+              {comparingCount === 0
+                ? "Not comparing — the consistency pass will not run."
+                : `Comparing each reviewed document against ${comparingCount} other${
+                    comparingCount === 1 ? "" : "s"
+                  }.`}
+            </span>
+            {(unpicked.length > 0 || pickedRecords.length > 1) && (
+              <button className="rc-mini" onClick={() => setShowCrossTargets((v) => !v)}>
+                {showCrossTargets ? "▾ Hide targets" : "▸ Adjust targets"}
+              </button>
+            )}
           </div>
 
-          {crossCheck.size === 0 && !crossCheckSelected && (
-            <p className="muted small rp-foot">
-              Nothing to compare against — the consistency pass will not run.
-            </p>
+          {showCrossTargets && (
+            <div className="doclist cross-targets">
+              {pickedRecords.length > 1 && (
+                <label className="docrow">
+                  <span className="docrow-main">
+                    <input
+                      type="checkbox"
+                      checked={crossCheckSelected}
+                      onChange={(e) => setCrossCheckSelected(e.target.checked)}
+                    />
+                    <span className="docrow-name">
+                      the {pickedRecords.length} selected documents, against each other
+                    </span>
+                  </span>
+                </label>
+              )}
+              {unpicked.map((r) => (
+                <label
+                  key={r.recordId}
+                  className={`docrow ${crossCheck.has(r.recordId) ? "on" : ""}`}
+                >
+                  <span className="docrow-main">
+                    <input
+                      type="checkbox"
+                      checked={crossCheck.has(r.recordId)}
+                      onChange={() => toggleCross(r.recordId)}
+                    />
+                    <span className="docrow-name">{r.docId ?? r.filename}</span>
+                  </span>
+                  <span className="docrow-typeflat">{recordTypeLabel(r.recordType)}</span>
+                </label>
+              ))}
+            </div>
           )}
         </section>
       )}
@@ -573,12 +830,12 @@ export function RunReview({
           <div className="rp-head-actions">
             {!isAll && !noneSelected && (
               <span className="muted small">
-                scoped — runs {passesFor(selectedApplicable)} of 4 check passes
+                Scoped — runs {passesFor(selectedApplicable)} of 4 check passes
               </span>
             )}
-            {noneSelected && <span className="rc-warn">select at least one</span>}
+            {noneSelected && <span className="rc-warn">Select at least one</span>}
             <button className="rc-disclose" onClick={() => setShowRules((v) => !v)}>
-              {showRules ? "▾ hide" : "▸ choose"}
+              {showRules ? "▾ Hide" : "▸ Choose"}
             </button>
           </div>
         </div>
@@ -599,7 +856,7 @@ export function RunReview({
                     <>
                       {" "}
                       <button className="rc-mini" onClick={() => setShowRules(true)}>
-                        show
+                        Show
                       </button>
                     </>
                   )}
@@ -611,6 +868,13 @@ export function RunReview({
 
         {showRules && (
           <div className="rc-rules">
+            <input
+              className="rc-rule-search"
+              type="search"
+              placeholder="Search rules by name or citation…"
+              value={ruleQuery}
+              onChange={(e) => setRuleQuery(e.target.value)}
+            />
             {groups.map((g) => {
               const on = g.usable.filter((r) => selected.has(r.ruleId)).length;
               const blocked = g.usable.length === 0;
@@ -628,14 +892,14 @@ export function RunReview({
                       disabled={blocked}
                       onClick={() => setGroup(g.usable, true)}
                     >
-                      all
+                      All
                     </button>
                     <button
                       className="rc-mini"
                       disabled={blocked}
                       onClick={() => setGroup(g.usable, false)}
                     >
-                      none
+                      None
                     </button>
                   </div>
 
@@ -646,7 +910,7 @@ export function RunReview({
                         <>
                           {" "}
                           — they are set to apply to{" "}
-                          <strong>{g.covers.map((c) => c.replace(/_/g, " ")).join(", ")}</strong>
+                          <strong>{g.covers.map(recordTypeLabel).join(", ")}</strong>
                         </>
                       )}
                       .
@@ -660,31 +924,102 @@ export function RunReview({
                     </div>
                   )}
 
-                  {g.rules.map((r) => {
-                    const usable = g.usable.includes(r);
-                    return (
-                      <label
-                        key={r.ruleId}
-                        className={`rc-rule ${usable ? "" : "off"}`}
-                        title={
-                          usable
-                            ? undefined
-                            : `Applies to ${r.appliesTo.join(", ")} — not ${typeLabel}`
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={usable && selected.has(r.ruleId)}
-                          disabled={!usable}
-                          onChange={() => toggleRule(r.ruleId)}
-                        />
-                        <span className="rc-rule-body">
-                          <span className="rc-rule-title">{r.title}</span>
-                          <span className="rc-rule-cite">{r.citation}</span>
-                        </span>
-                      </label>
-                    );
-                  })}
+                  {(() => {
+                    const q = ruleQuery.trim().toLowerCase();
+                    const match = (r: CorpusRule) =>
+                      !q ||
+                      r.title.toLowerCase().includes(q) ||
+                      r.citation.toLowerCase().includes(q);
+
+                    const visible = g.rules.filter(match);
+                    if (q && visible.length === 0) return null;
+
+                    // Partition this group's visible rules into topic sub-groups,
+                    // ordered as TOPIC_ORDER. A group whose rules all fall in one
+                    // topic (Your procedures, Logic) renders as a single flat list.
+                    const byTopic = new Map<string, CorpusRule[]>();
+                    for (const r of visible) {
+                      const t = topicFor(r);
+                      if (!byTopic.has(t)) byTopic.set(t, []);
+                      byTopic.get(t)!.push(r);
+                    }
+                    const subs = [...TOPIC_ORDER, "Other requirements"]
+                      .filter((t, i, a) => a.indexOf(t) === i && byTopic.has(t))
+                      .map((t) => ({ topic: t, rules: byTopic.get(t)! }));
+                    const flat = subs.length <= 1;
+
+                    const renderRule = (r: CorpusRule) => {
+                      const usable = g.usable.includes(r);
+                      return (
+                        <label
+                          key={r.ruleId}
+                          className={`rc-rule ${usable ? "" : "off"}`}
+                          title={
+                            usable ? undefined : `Applies to ${r.appliesTo.join(", ")} — not ${typeLabel}`
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={usable && selected.has(r.ruleId)}
+                            disabled={!usable}
+                            onChange={() => toggleRule(r.ruleId)}
+                          />
+                          <span className="rc-rule-body">
+                            <span className="rc-rule-title">{r.title}</span>
+                            <span className="rc-rule-cite">{r.citation}</span>
+                          </span>
+                        </label>
+                      );
+                    };
+
+                    if (flat) return visible.map(renderRule);
+
+                    return subs.map((sub) => {
+                      // A search auto-opens matching topics; otherwise the reader
+                      // opens them. Keeps a 100-rule list to one screen of headers.
+                      const open = q !== "" || openTopics.has(g.key + "|" + sub.topic);
+                      const usableInSub = sub.rules.filter((r) => g.usable.includes(r));
+                      const onInSub = usableInSub.filter((r) => selected.has(r.ruleId)).length;
+                      return (
+                        <div key={sub.topic} className="rc-subgroup">
+                          <div className="rc-subgroup-head">
+                            <button
+                              className="rc-subgroup-toggle"
+                              onClick={() =>
+                                setOpenTopics((prev) => {
+                                  const next = new Set(prev);
+                                  const k = g.key + "|" + sub.topic;
+                                  next.has(k) ? next.delete(k) : next.add(k);
+                                  return next;
+                                })
+                              }
+                            >
+                              <span className="rc-chevron">{open ? "▾" : "▸"}</span>
+                              {sub.topic}
+                              <span className="rc-badge">
+                                {onInSub}/{usableInSub.length}
+                              </span>
+                            </button>
+                            <button
+                              className="rc-mini"
+                              disabled={usableInSub.length === 0}
+                              onClick={() => setGroup(usableInSub, true)}
+                            >
+                              All
+                            </button>
+                            <button
+                              className="rc-mini"
+                              disabled={usableInSub.length === 0}
+                              onClick={() => setGroup(usableInSub, false)}
+                            >
+                              None
+                            </button>
+                          </div>
+                          {open && <div className="rc-subgroup-rules">{sub.rules.map(renderRule)}</div>}
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               );
             })}
@@ -695,7 +1030,7 @@ export function RunReview({
       {/* 4 — cost and go */}
       <section className="rp-section rp-go">
         <label className="rc-opt">
-          samples
+          Samples
           <select
             value={samples}
             disabled={offline}
@@ -712,7 +1047,7 @@ export function RunReview({
             checked={offline}
             onChange={(e) => setOffline(e.target.checked)}
           />
-          offline (free, crude)
+          Offline (free, crude)
         </label>
         <span className="rc-cost">
           {offline
@@ -751,14 +1086,14 @@ export function RunReview({
                         {r.status === "complete"
                           ? `${r.findingCount ?? 0} finding${r.findingCount === 1 ? "" : "s"}`
                           : r.status === "failed"
-                            ? "failed"
+                            ? "Failed"
                             : r.status === "pending"
-                              ? "queued"
-                              : (r.phase ?? "working")}
+                              ? "Queued"
+                              : sentence(r.phase ?? "working")}
                       </span>
                       {r.runId && (
                         <button className="rc-mini" onClick={() => onOpenRun(r.runId!)}>
-                          view
+                          View
                         </button>
                       )}
                     </div>

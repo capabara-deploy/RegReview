@@ -18,18 +18,37 @@ import {
 } from "./auth.js";
 import { consumeQuota, ensureQuotaIndexes, initQuota, peekQuota, resetQuota } from "./quota.js";
 import {
+  addChange,
+  advanceStage,
+  attachChanges,
   categoriesForRules,
+  ChangeType,
+  clearSubmission,
   config,
+  createBaseline,
+  createSubmission,
+  cumulativeAssessment,
   deleteSop,
+  Determination,
   detectFormat,
+  effectiveScore,
   extractRecord,
+  fileSubmission,
   FindingStatus,
+  formatRationale,
+  getBaseline,
+  getChange,
   getCorpusDb,
   getCustomerDb,
   getSopsDb,
   getSop,
+  implicatedBranches,
+  loadGraph,
   ingestSop,
+  listBaselines,
+  listChanges,
   listSops,
+  listSubmissions,
   loadFindings,
   loadRulesFor,
   migrateCorpus,
@@ -38,7 +57,16 @@ import {
   RecordType,
   runReview,
   saveRecord,
+  saveSuggestedScore,
+  scoreChange,
+  setDetermination,
   setFindingStatus,
+  setScore,
+  setSubmissionStatus,
+  setThreshold,
+  Stage,
+  SubmissionKind,
+  SubmissionStatus,
   updateSop,
   type Block,
   type Db,
@@ -217,7 +245,26 @@ if (AUTH_ENABLED) {
     if (!parsed.success) {
       return res.status(400).json({ error: "username and password are required" });
     }
-    const username = await verifyLogin(parsed.data.username, parsed.data.password);
+    /**
+     * A failure to REACH the account database is not a failed login.
+     *
+     * `verifyLogin` throws when MongoDB is unreachable, and without this the
+     * exception became a bare 500 that the sign-in screen reported as bad
+     * credentials — sending whoever hit it to check their password while the
+     * real problem was an Atlas IP allowlist. Say which of the two it is.
+     */
+    let username: string | null;
+    try {
+      username = await verifyLogin(parsed.data.username, parsed.data.password);
+    } catch (err) {
+      console.error("[login] account database unreachable:", (err as Error).message);
+      return res.status(503).json({
+        error:
+          "Could not reach the account database, so your sign-in could not be checked. " +
+          "This is not a password problem. If this is a dev machine, the usual cause is " +
+          "MongoDB Atlas blocking this IP (Security → Network Access).",
+      });
+    }
     if (!username) {
       return res.status(401).json({ error: "invalid credentials" });
     }
@@ -367,7 +414,21 @@ app.get("/api/records/:recordId", async (req, res) => {
     .prepare(`SELECT * FROM runs WHERE record_id = ? ORDER BY started_at DESC`)
     .all<RunRow>(recordId);
 
+  // The change this document captures, if it captures one. Surfaced so a
+  // reviewer reading a finding on a change order can reach the change itself —
+  // the join has always existed on `changes.record_id` and was never navigable.
+  const captured = await db
+    .prepare(
+      `SELECT change_id, proposal, stage FROM changes
+        WHERE record_id = ? AND stage NOT IN ('superseded')
+        ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get<{ change_id: string; proposal: string; stage: string }>(recordId);
+
   res.json({
+    capturedChange: captured
+      ? { changeId: captured.change_id, proposal: captured.proposal, stage: captured.stage }
+      : null,
     recordId: record.record_id,
     filename: record.filename,
     recordType: record.record_type,
@@ -439,6 +500,275 @@ app.patch("/api/runs/:runId/findings/:findingId", async (req, res) => {
 
   const updated = (await loadFindings(runId)).find((f: Finding) => f.findingId === findingId);
   res.json(updated);
+});
+
+// ---------------------------------------------------------------------------
+// Cumulative change ledger (Phase 2).
+//
+// Every write here is a flag or a human input. The one thing this API will
+// never expose is an endpoint that returns a submit / don't-submit
+// determination — that is the manufacturer's call, and no route computes it.
+// ---------------------------------------------------------------------------
+
+app.get("/api/baselines", async (_req, res) => {
+  res.json(await listBaselines());
+});
+
+const BaselineBody = z.object({
+  device: z.string().min(1),
+  clearanceId: z.string().min(1),
+  clearedAt: z.string().optional(),
+  configuration: z.record(z.string()).optional(),
+  note: z.string().optional(),
+  threshold: z.number().int().min(1).max(1000).optional(),
+  thresholdSource: z.string().optional(),
+});
+
+app.post("/api/baselines", async (req, res) => {
+  const parsed = BaselineBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  res.status(201).json(await createBaseline(parsed.data));
+});
+
+// The escalation threshold belongs to the customer's change-control procedure,
+// so it is editable, and the citation is editable with it — an escalation
+// message that cannot name the procedure it comes from is just an opinion.
+const ThresholdBody = z.object({
+  threshold: z.number().int().min(1).max(1000),
+  thresholdSource: z.string().nullable().optional(),
+});
+
+app.patch("/api/baselines/:baselineId/threshold", async (req, res) => {
+  const parsed = ThresholdBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const updated = await setThreshold(
+    req.params.baselineId,
+    parsed.data.threshold,
+    parsed.data.thresholdSource ?? null,
+  );
+  if (!updated) return res.status(404).json({ error: "baseline not found" });
+  res.json(updated);
+});
+
+/** A baseline's changes and the deterministic cumulative assessment over them. */
+app.get("/api/baselines/:baselineId/assessment", async (req, res) => {
+  const baseline = await getBaseline(req.params.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+  const changes = await listChanges(baseline.baselineId);
+  const submissions = await listSubmissions(baseline.baselineId);
+  const assessment = cumulativeAssessment(baseline, changes, submissions);
+  // Attach, per change, the flowchart branches its type implicates — questions
+  // to consider, never answers — and the resolved score with its provenance, so
+  // the UI can show WHERE each number came from rather than just the total.
+  res.json({
+    ...assessment,
+    changes: changes.map((c) => ({
+      ...c,
+      branches: implicatedBranches(c.changeType),
+      effective: effectiveScore(c),
+    })),
+  });
+});
+
+const ChangeBody = z.object({
+  proposal: z.string().min(1),
+  comparator: z.string().optional(),
+  changeType: ChangeType.optional(),
+  subsystem: z.string().optional(),
+  stage: Stage.optional(),
+  changedAt: z.string().optional(),
+});
+
+app.post("/api/baselines/:baselineId/changes", async (req, res) => {
+  const baseline = await getBaseline(req.params.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+  const parsed = ChangeBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  res.status(201).json(await addChange({ baselineId: baseline.baselineId, ...parsed.data }));
+});
+
+// The ONLY writer of a change's regulatory determination, and it takes it
+// straight from the human. The tool never sets this.
+const DeterminationBody = z.object({ determination: Determination });
+
+app.patch("/api/changes/:changeId/determination", async (req, res) => {
+  const parsed = DeterminationBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const updated = await setDetermination(req.params.changeId, parsed.data.determination);
+  if (!updated) return res.status(404).json({ error: "change not found" });
+  res.json(updated);
+});
+
+// --- Workflow ---------------------------------------------------------------
+
+const StageBody = z.object({
+  stage: Stage,
+  /** Required to reach `documented`: the controlled document capturing it. */
+  recordId: z.string().optional(),
+});
+
+/**
+ * Advance a change through the workflow.
+ *
+ * The reviewer who marks a change documented is usually not the engineer who
+ * logged it, so the acting username is stamped from the session rather than
+ * taken from the body — an unverifiable "documented by" is worse than none.
+ */
+app.patch("/api/changes/:changeId/stage", async (req, res) => {
+  const parsed = StageBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  try {
+    const updated = await advanceStage(req.params.changeId, parsed.data.stage, {
+      recordId: parsed.data.recordId,
+      actor: req.username,
+    });
+    res.json(updated);
+  } catch (err) {
+    // Backwards transitions and a documented-without-a-document both land here;
+    // both are the caller's error, not a server fault.
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// --- Scoring ----------------------------------------------------------------
+
+/**
+ * Ask the model to suggest a risk score for a change.
+ *
+ * Writes `suggested_score` only. It cannot write `score`, cannot write a
+ * determination, and its output is clamped up to the change type's floor when
+ * totals are computed — see changeScorer.ts for why those three guards stand in
+ * for the hallucination guard that free-typed text cannot have.
+ */
+app.post("/api/changes/:changeId/suggest-score", async (req, res) => {
+  const change = await getChange(req.params.changeId);
+  if (!change) return res.status(404).json({ error: "change not found" });
+  const baseline = await getBaseline(change.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+
+  try {
+    const suggestion = await scoreChange(change, {
+      device: baseline.device,
+      clearanceId: baseline.clearanceId,
+    });
+    const updated = await saveSuggestedScore(
+      change.changeId,
+      suggestion.score,
+      formatRationale(suggestion),
+    );
+    res.json({ change: updated, suggestion });
+  } catch (err) {
+    res.status(502).json({ error: `scoring failed: ${(err as Error).message}` });
+  }
+});
+
+// The only writer of the human-confirmed score. `belowFloorRationale` is the
+// documented rationale the FDA change guidance asks for when a presumptively
+// significant change is judged otherwise; without it the floor holds, which is
+// enforced in effectiveScore rather than here.
+const ScoreBody = z.object({
+  score: z.number().int().min(1).max(10),
+  belowFloorRationale: z.string().optional(),
+});
+
+app.patch("/api/changes/:changeId/score", async (req, res) => {
+  const parsed = ScoreBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const updated = await setScore(req.params.changeId, parsed.data.score, {
+    actor: req.username,
+    belowFloorRationale: parsed.data.belowFloorRationale,
+  });
+  if (!updated) return res.status(404).json({ error: "change not found" });
+  res.json({ ...updated, effective: effectiveScore(updated) });
+});
+
+// --- Submissions ------------------------------------------------------------
+//
+// Tracking only. No route decides that a submission is needed, picks its kind,
+// or files it; every one of these records something a person already did.
+
+const SubmissionBody = z.object({
+  title: z.string().min(1),
+  kind: SubmissionKind.optional(),
+  note: z.string().optional(),
+  changeIds: z.array(z.string()).optional(),
+});
+
+app.get("/api/baselines/:baselineId/submissions", async (req, res) => {
+  res.json(await listSubmissions(req.params.baselineId));
+});
+
+app.post("/api/baselines/:baselineId/submissions", async (req, res) => {
+  const baseline = await getBaseline(req.params.baselineId);
+  if (!baseline) return res.status(404).json({ error: "baseline not found" });
+  const parsed = SubmissionBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  try {
+    res.status(201).json(await createSubmission({ baselineId: baseline.baselineId, ...parsed.data }));
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+app.post("/api/submissions/:submissionId/changes", async (req, res) => {
+  const parsed = z.object({ changeIds: z.array(z.string()).min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  try {
+    const attached = await attachChanges(req.params.submissionId, parsed.data.changeIds);
+    res.json({ attached });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+const SubmissionStatusBody = z.object({
+  status: SubmissionStatus,
+  filedAt: z.string().optional(),
+  /** Required for `cleared`: the number on the FDA letter. */
+  clearanceId: z.string().optional(),
+  decisionAt: z.string().optional(),
+});
+
+/**
+ * Move a submission's status.
+ *
+ * `cleared` is the interesting one: it establishes a successor baseline and
+ * retires the changes the submission carried, which is what resets accumulated
+ * risk. It needs the clearance number from the FDA letter, entered by a person —
+ * the tool never predicts or assumes one.
+ */
+app.patch("/api/submissions/:submissionId/status", async (req, res) => {
+  const parsed = SubmissionStatusBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
+  const { status, filedAt, clearanceId, decisionAt } = parsed.data;
+  try {
+    if (status === "cleared") {
+      if (!clearanceId) {
+        return res
+          .status(400)
+          .json({ error: "clearanceId is required to record a clearance" });
+      }
+      return res.json(
+        await clearSubmission(req.params.submissionId, { clearanceId, decisionAt }),
+      );
+    }
+    const updated =
+      status === "filed"
+        ? await fileSubmission(req.params.submissionId, filedAt ?? new Date().toISOString())
+        : await setSubmissionStatus(req.params.submissionId, status);
+    if (!updated) return res.status(404).json({ error: "submission not found" });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Cross-document graph (Phase 3). Read-only. Deterministic reference edges plus
+// per-document finding severity, for the reference map. Computed on read.
+// ---------------------------------------------------------------------------
+app.get("/api/graph", async (_req, res) => {
+  res.json(await loadGraph());
 });
 
 /** The audit trail for one finding. */
@@ -619,6 +949,72 @@ app.post("/api/records", upload.single("file"), async (req, res) => {
     pageCount: extracted.pageCount ?? null,
     blocks: extracted.blocks.length,
     // Surfaced so the client can warn the user rather than let a scan look clean.
+    warning: extracted.warning ?? null,
+  });
+});
+
+/**
+ * Replace a document's file in place, keeping its identity.
+ *
+ * The workflow this removes: upload a new version, then hunt down and delete the
+ * old one. Here the new file takes over the existing record id and type, so a
+ * revised document stays the same document. saveRecord re-blocks it and, because
+ * the content hash changes, discards findings from the prior version — those
+ * were about text that no longer exists, and keeping them would anchor
+ * highlights into a document that changed underneath them.
+ */
+app.post("/api/records/:recordId/replace", upload.single("file"), async (req, res) => {
+  const uploaded = req.file;
+  if (!uploaded) return res.status(400).json({ error: "no file in request" });
+
+  const existing = await getCustomerDb()
+    .prepare(`SELECT record_id, record_type FROM records WHERE record_id = ?`)
+    .get<{ record_id: string; record_type: string }>(req.params.recordId);
+  if (!existing) return res.status(404).json({ error: "record not found" });
+
+  if (!detectFormat(uploaded.originalname)) {
+    return res.status(415).json({
+      error: `unsupported file type: ${extname(uploaded.originalname) || "(none)"}. ` +
+        `Supported: .pdf, .docx, .md, .txt`,
+    });
+  }
+
+  const parsedType = RecordType.safeParse(req.body["recordType"] ?? existing.record_type);
+  const recordType = parsedType.success ? parsedType.data : (existing.record_type as never);
+
+  const storedPath = join(uploadDir, safeStoredName(uploaded.originalname));
+  writeFileSync(storedPath, uploaded.buffer);
+
+  let extracted;
+  try {
+    extracted = await extractRecord({ path: storedPath, recordType });
+  } catch (err) {
+    return res.status(422).json({
+      error: err instanceof Error ? err.message : "could not read the document",
+    });
+  }
+
+  // Keep the existing identity: the new file IS this record now.
+  extracted.record.recordId = existing.record_id;
+  extracted.record.filename = basename(uploaded.originalname);
+  // Blocks are keyed to the record id, so re-key them too.
+  extracted.blocks = extracted.blocks.map((b, i) => ({
+    ...b,
+    recordId: existing.record_id,
+    blockId: `${existing.record_id}:b${i}`,
+  }));
+  const { discardedFindings } = await saveRecord(extracted.record, extracted.blocks);
+
+  res.json({
+    recordId: extracted.record.recordId,
+    filename: extracted.record.filename,
+    recordType: extracted.record.recordType,
+    docId: extracted.record.docId,
+    revision: extracted.record.revision,
+    format: extracted.format,
+    pageCount: extracted.pageCount ?? null,
+    blocks: extracted.blocks.length,
+    discardedFindings,
     warning: extracted.warning ?? null,
   });
 });

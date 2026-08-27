@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Finding, FindingStatus, RecordDetail, RecordSummary, Severity } from "./api";
 import { dominant, segment, SEVERITY_MARK } from "./highlight";
 import { FindingPanel } from "./FindingPanel";
+import { mapNodeForRecord, type Page } from "./routes";
 
 /**
  * Read a completed review: the document with its findings highlighted in place,
@@ -28,6 +29,7 @@ export function Findings({
   onOpenRecord,
   onSelectRun,
   onStatus,
+  onNavigate,
 }: {
   records: RecordSummary[];
   record: RecordDetail | null;
@@ -36,6 +38,7 @@ export function Findings({
   onOpenRecord: (recordId: string) => void;
   onSelectRun: (runId: string) => void;
   onStatus: (finding: Finding, status: FindingStatus, note?: string) => Promise<void>;
+  onNavigate: (page: Page, target?: string | null) => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hiddenSeverities, setHiddenSeverities] = useState<Set<Severity>>(new Set());
@@ -154,6 +157,27 @@ export function Findings({
             ))}
           </select>
         )}
+
+        {/* The pathway out of a document: where it sits in the record, and the
+            change it captures. Both joins existed already and neither was
+            reachable from here. */}
+        <div className="fb-links">
+          {record.capturedChange && (
+            <button
+              className="link-btn"
+              title={record.capturedChange.proposal}
+              onClick={() => onNavigate("changes", record.capturedChange!.changeId)}
+            >
+              Captures a change
+            </button>
+          )}
+          <button
+            className="link-btn"
+            onClick={() => onNavigate("map", mapNodeForRecord(record.recordId))}
+          >
+            Show on map
+          </button>
+        </div>
       </div>
 
       {/* A run that failed must say so. Otherwise it renders as a document with

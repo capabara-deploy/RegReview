@@ -126,7 +126,9 @@ async function main(): Promise<void> {
   for (const { rule, frequency, percentile } of [...loaded].sort(
     (a, b) => b.frequency - a.frequency,
   )) {
-    const source = sourceFor(rule) === "iso_clause" ? "iso  " : "logic";
+    const source = { iso_clause: "iso  ", cfr: "cfr  ", guidance: "guid ", logic: "logic" }[
+      sourceFor(rule)
+    ];
     const harm = rule.harmLinked ? "harm" : "    ";
     console.log(
       `  ${rule.ruleId.padEnd(width)}  ${source} ${harm}  ` +

@@ -38,6 +38,68 @@ export function sha256Hex(s: string): string {
 }
 
 /**
+ * Known QMS document-id prefixes. Widened from the original CAPA/NCR/CR/DCO/COMP
+ * set so design-history, risk, verification, and change documents are recognized
+ * too — both for a record's own id and for detecting references BETWEEN documents
+ * (the graph's reference edges). Sub-document identifiers (FM-201, HAZ-03,
+ * RC-118, DI-114, PCA-4400) are deliberately NOT prefixes: they are items within
+ * a document, not documents.
+ */
+const DOC_ID_PREFIXES = [
+  "CAPA", "NCR", "CR", "DCO", "COMP", "CA", "DIR", "DOS", "DR", "VER", "VAL",
+  "TM", "RMP", "RMF", "FMEA", "IFU", "RA", "QSP", "QM", "WI", "SOP", "POL", "ECO",
+];
+
+/** A fresh global document-id matcher. Never share one — /g carries lastIndex. */
+export function docIdMatcher(): RegExp {
+  const prefixes = DOC_ID_PREFIXES.join("|");
+  return new RegExp(
+    String.raw`\b(?:(?:K|P|DEN)\d{6}|FDA-483(?:-\d{2,4})?|(?:${prefixes})-[A-Z0-9]{2,6}(?:-[A-Z0-9]{1,4}){0,2})\b`,
+    "gi",
+  );
+}
+
+/**
+ * The record's own document id.
+ *
+ * Prefer an id on a labeling line — "Document No.:", "Record No.:", or the
+ * "510(k) Number:" of a summary — which is where a document states its own id.
+ * Fall back to the first id in the header region only (not the whole body):
+ * a document like an FDA 483 references the records it is written about before
+ * it names itself, and a whole-body first-match would mis-identify it as the
+ * first record it cites. Returns null if none is found.
+ */
+export function extractDocId(text: string): string | null {
+  const labeled =
+    /(?:Document|Record)\s*No\.?\s*[:*#\s]*([^\n]+)|510\(k\)\s*(?:Number|Summary)?\s*[:*#\s]*([^\n]+)/i.exec(
+      text,
+    );
+  if (labeled) {
+    const line = labeled[1] ?? labeled[2] ?? "";
+    const m = docIdMatcher().exec(line);
+    if (m) return m[0];
+  }
+  const header = text.slice(0, 400);
+  const first = docIdMatcher().exec(header);
+  return first ? first[0] : null;
+}
+
+export interface DocIdReference {
+  id: string;
+  /** Offset of the reference in the normalized text. */
+  index: number;
+}
+
+/** Every document-id occurrence in the text, with offsets, for edge extraction. */
+export function findDocIdReferences(text: string): DocIdReference[] {
+  const out: DocIdReference[] = [];
+  for (const m of text.matchAll(docIdMatcher())) {
+    if (m.index !== undefined) out.push({ id: m[0], index: m.index });
+  }
+  return out;
+}
+
+/**
  * Split normalized text into paragraph-level blocks.
  *
  * Blocks are paragraph-sized rather than sentence- or page-sized because that
@@ -115,9 +177,7 @@ export function recordFromText(args: {
 
   // Pull the company's own identifier and revision out of the text rather than
   // assigning one: an investigator asks for "CAPA-2026-0142", not our row id.
-  const docId = /\b((?:CAPA|NCR|CR|DCO|COMP)[- ]?\d{2,4}[- ]?\d{1,5})\b/i.exec(
-    normalizedText,
-  )?.[1];
+  const docId = extractDocId(normalizedText);
   // The trailing \b after the Rev/Revision token is load-bearing: without it,
   // "Reviewed by" matches as Rev + "iewed" and the record silently acquires a
   // revision of "iewed". Markdown emphasis is skipped so "**Rev:** 2" works.

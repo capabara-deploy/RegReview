@@ -1,11 +1,18 @@
 {
   "files": [],
-  // packages/eval joins this list when Phase 2 writes its fixtures; tsc errors
-  // on a project whose `include` matches no files. apps/web is not a composite
-  // project (Vite owns its build), so it is typechecked by its own `tsc -b`.
+  // apps/web is not a composite project (Vite owns its build), so it is
+  // typechecked by the separate `typecheck:web` pass that `build` chains.
+  //
+  // packages/eval was meant to join this list "when Phase 2 writes its
+  // fixtures". It did, and this was not updated, so the harness went
+  // unchecked and accumulated three type errors — `npm run eval` runs through
+  // tsx, which strips types without checking them. A harness whose whole job
+  // is producing a trustworthy number should be the last thing compiled on
+  // faith.
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/corpus" },
+    { "path": "./packages/eval" },
     { "path": "./apps/server" }
   ]
 }

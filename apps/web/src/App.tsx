@@ -8,12 +8,27 @@ import {
   type RecordDetail,
   type RecordSummary,
 } from "./api";
+import { ChangeLedger } from "./ChangeLedger";
 import { Findings } from "./Findings";
+import { GraphMap } from "./GraphMap";
 import { Login } from "./Login";
 import { Procedures } from "./Procedures";
 import { RunReview } from "./RunReview";
+import {
+  DEFAULT_ROUTE,
+  navigateTo,
+  parseHash,
+  type Page,
+  type Route,
+} from "./routes";
 
-type Page = "run" | "findings" | "procedures";
+/**
+ * Projects — a device and its documents. One for now (every uploaded record
+ * belongs to it), but modeled as a list and lifted into the top bar so the
+ * scope is explicit and adding a second project later is a data change, not a
+ * UI rebuild.
+ */
+const PROJECTS = [{ id: "northlake-vp400", name: "Northlake VP-400" }];
 
 /**
  * The shell: navigation, the record/run the findings view is showing, and the
@@ -33,7 +48,24 @@ export function App() {
   // what a reviewer does most, and it's the half of the product that costs
   // nothing to look at — the first screen shouldn't be a button that spends
   // money. The newest reviewed document is opened automatically below.
-  const [page, setPage] = useState<Page>("findings");
+  /**
+   * The route, derived from the address bar rather than held independently, so
+   * a pasted link, the back button and an in-app click all arrive by the same
+   * path. `navigate` only writes the hash; the listener below turns it back
+   * into state.
+   */
+  const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
+  const page = route.page;
+  const navigate = useCallback((to: Page, target?: string | null) => navigateTo(to, target), []);
+
+  useEffect(() => {
+    const onHash = () => setRoute(parseHash(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    // An app opened at a bare URL should still have an address.
+    if (!window.location.hash) navigateTo(DEFAULT_ROUTE.page);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const [project, setProject] = useState(PROJECTS[0]!.id);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [record, setRecord] = useState<RecordDetail | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -132,6 +164,21 @@ export function App() {
   }, [records, record, openRecord]);
 
   /**
+   * A findings link names a document — open it.
+   *
+   * This also claims `landed`, so an explicit link always beats the landing
+   * heuristic above. Without that, arriving at a shared link would open the
+   * document you asked for and then have it replaced by the default one as the
+   * record list resolved.
+   */
+  useEffect(() => {
+    if (route.page !== "findings" || !route.target) return;
+    if (record?.recordId === route.target) return;
+    landed.current = true;
+    void openRecord(route.target);
+  }, [route.page, route.target, record?.recordId, openRecord]);
+
+  /**
    * Re-attach to the server's reviews on load.
    *
    * Job ids lived only in this component's state, so a reload orphaned them: a
@@ -187,7 +234,7 @@ export function App() {
         }
         setRunId(newRunId);
         setFindings(findingRows);
-        setPage("findings");
+        navigateTo("findings");
       } catch (e) {
         if (e instanceof AuthError) return setUsername(null);
         setError((e as Error).message);
@@ -285,25 +332,51 @@ export function App() {
           <span className="tagline">pre-inspection review</span>
         </div>
 
+        {/* Project scope. One project for now — every document belongs to it —
+            but it sits in the top bar so it governs every page as more are
+            added: the file tree, the map, the ledger all read from here. */}
+        <label className="project-picker" title="Project — the device and its documents">
+          <span className="project-label">Project</span>
+          <select value={project} onChange={(e) => setProject(e.target.value)}>
+            {PROJECTS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <nav className="viewnav">
           <button
             className={`viewtab ${page === "run" ? "on" : ""}`}
-            onClick={() => setPage("run")}
+            onClick={() => navigate("run")}
           >
             Run a review
             {runningCount > 0 && <span className="nav-dot">{runningCount}</span>}
           </button>
           <button
             className={`viewtab ${page === "findings" ? "on" : ""}`}
-            onClick={() => setPage("findings")}
+            onClick={() => navigate("findings")}
           >
             Findings
           </button>
           <button
             className={`viewtab ${page === "procedures" ? "on" : ""}`}
-            onClick={() => setPage("procedures")}
+            onClick={() => navigate("procedures")}
           >
             Procedures
+          </button>
+          <button
+            className={`viewtab ${page === "changes" ? "on" : ""}`}
+            onClick={() => navigate("changes")}
+          >
+            Changes
+          </button>
+          <button
+            className={`viewtab ${page === "map" ? "on" : ""}`}
+            onClick={() => navigate("map")}
+          >
+            Map
           </button>
         </nav>
 
@@ -333,10 +406,27 @@ export function App() {
           onOpenRecord={(id) => void openRecord(id)}
           onSelectRun={(id) => void selectRun(id)}
           onStatus={updateStatus}
+          onNavigate={navigate}
         />
       )}
 
       {page === "procedures" && <Procedures onChanged={refreshRecords} />}
+
+      {page === "changes" && (
+        <ChangeLedger
+          target={route.target}
+          onNavigate={navigate}
+          onAuthError={() => setUsername(null)}
+        />
+      )}
+
+      {page === "map" && (
+        <GraphMap
+          target={route.target}
+          onNavigate={navigate}
+          onAuthError={() => setUsername(null)}
+        />
+      )}
     </div>
   );
 }
