@@ -318,3 +318,51 @@ CREATE TABLE IF NOT EXISTS submissions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_submissions_baseline ON submissions(baseline_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Extraction coverage (2026-10). What was read from each document and what was
+-- not — scanned pages, images, hidden sheets, formulas with no saved value —
+-- so an empty or short review can never be mistaken for a clean one. JSON, see
+-- `Coverage` in types.ts. Null for records extracted before this existed.
+-- ---------------------------------------------------------------------------
+ALTER TABLE records ADD COLUMN IF NOT EXISTS format TEXT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS coverage TEXT;
+
+-- Spreadsheet rows: the row's A1 range ("FMEA!A14:G14") and each cell's offsets
+-- into normalized_text (JSON `CellSpan[]`), so a finding resolves to a cell.
+ALTER TABLE blocks ADD COLUMN IF NOT EXISTS anchor TEXT;
+ALTER TABLE blocks ADD COLUMN IF NOT EXISTS cells TEXT;
+
+-- ---------------------------------------------------------------------------
+-- Plain-language summaries (2026-10), see documentSummary.ts. Neither is a
+-- finding: no severity, no anchor. `records.description` is JSON
+-- `DocumentDescription`, valid only while its sha256 matches the record's;
+-- `runs.summary` is JSON `RunSummary`, valid only while its findings basis does.
+-- ---------------------------------------------------------------------------
+ALTER TABLE records ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS summary TEXT;
+
+-- ---------------------------------------------------------------------------
+-- Projects (2026-10): a device and its documents. Every record and every
+-- change-ledger baseline belongs to one; changes and submissions belong to it
+-- through their baseline. Everything that existed before projects is Northlake
+-- VP-400, which is also the default for callers that don't say (the CLIs, the
+-- eval harness). Procedures (sops db) are deliberately NOT per-project: they
+-- are the company's procedures, and govern every device it makes.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS projects (
+  project_id TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+INSERT INTO projects (project_id, name, created_at)
+VALUES ('northlake-vp400', 'Northlake VP-400', '2026-07-29T00:00:00.000Z')
+ON CONFLICT (project_id) DO NOTHING;
+
+ALTER TABLE records ADD COLUMN IF NOT EXISTS project_id TEXT NOT NULL DEFAULT 'northlake-vp400'
+  REFERENCES projects(project_id);
+CREATE INDEX IF NOT EXISTS idx_records_project ON records(project_id);
+
+ALTER TABLE baselines ADD COLUMN IF NOT EXISTS project_id TEXT NOT NULL DEFAULT 'northlake-vp400'
+  REFERENCES projects(project_id);

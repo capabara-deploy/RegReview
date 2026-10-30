@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Finding, FindingStatus, RecordDetail, RecordSummary, Severity } from "./api";
 import { dominant, segment, SEVERITY_MARK } from "./highlight";
+import { CoverageStrip, findingLocation } from "./Coverage";
 import { FindingPanel } from "./FindingPanel";
+import { RunSummaryCard } from "./RunSummary";
 import { mapNodeForRecord, type Page } from "./routes";
 
 /**
@@ -211,6 +213,10 @@ export function Findings({
         </div>
       )}
 
+      <CoverageStrip coverage={record.coverage} />
+
+      <RunSummaryCard record={record} runId={runId} findings={findings} onSelectFinding={setSelected} />
+
       <div className="filters">
         <span className="filter-label">Severity</span>
         {SEVERITIES.map((s) => (
@@ -288,6 +294,7 @@ export function Findings({
           {selectedFinding ? (
             <FindingPanel
               finding={selectedFinding}
+              location={findingLocation(record, selectedFinding)}
               onClose={() => setSelected(null)}
               onStatus={onStatus}
             />
@@ -296,13 +303,15 @@ export function Findings({
               <h2>Findings</h2>
               {findings.length === 0 && (
                 <p className="muted">
-                  This run produced no findings, or no review has been run on this document yet.
+                  {record.coverage && record.coverage.status !== "complete"
+                    ? "No findings in what was read. Parts of this document were not read — see above — so this is not a clean result."
+                    : "This run produced no findings, or no review has been run on this document yet."}
                 </p>
               )}
               {findings.length > 0 && visible.length === 0 && (
                 <p className="muted">No findings match the filters.</p>
               )}
-              {visible.map((f, i) => (
+              {visible.map((f) => (
                 <button
                   key={f.findingId}
                   className={`list-item sev-${f.severity} status-${f.status}`}
@@ -316,9 +325,15 @@ export function Findings({
                     {f.status !== "open" && <span className="list-status">{f.status}</span>}
                   </div>
                   <div className="list-problem">
-                    {i + 1}. {f.problem}
+                    {findings.indexOf(f) + 1}. {f.problem}
                   </div>
-                  <div className="list-cite">{f.citation}</div>
+                  <div className="list-cite">
+                    {f.citation}
+                    {(() => {
+                      const at = findingLocation(record, f);
+                      return at ? <code className="list-loc">{at}</code> : null;
+                    })()}
+                  </div>
                 </button>
               ))}
             </div>

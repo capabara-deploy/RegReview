@@ -343,9 +343,84 @@ export interface RecordDetail {
   docId: string | null;
   revision: string | null;
   normalizedText: string;
-  blocks: { blockId: string; ordinal: number; charStart: number; charEnd: number; heading: string | null }[];
+  blocks: {
+    blockId: string;
+    ordinal: number;
+    charStart: number;
+    charEnd: number;
+    heading: string | null;
+    /** Spreadsheet row range, e.g. "FMEA!A7:G7"; null for prose formats. */
+    anchor: string | null;
+    cells: { ref: string; charStart: number; charEnd: number }[] | null;
+  }[];
   runs: RunSummary[];
+  format: string | null;
+  /** Null for documents uploaded before coverage was recorded. */
+  coverage: Coverage | null;
+  description: DocumentDescription | null;
 }
+
+/** What a document is and what it is for — written once per version, not a finding. */
+export interface DocumentDescription {
+  label: string;
+  summary: string;
+}
+
+export type PurposeLevel = "supports" | "partly" | "does_not" | "cannot_tell";
+
+/** A review's plain-language summary — mirrors core's `RunSummary`. Not a finding. */
+export interface RunSummary {
+  issues: { headline: string; why: string; findingIds: string[] }[];
+  purpose: PurposeLevel;
+  purposeReason: string;
+  /** Why a deterministic cap lowered the answer, if one did. */
+  purposeCappedBy: string | null;
+  model: string;
+  createdAt: string;
+}
+
+/** What extraction read and what it could not — mirrors core's `Coverage`. */
+export interface Coverage {
+  format: string;
+  declaredExtension: string | null;
+  units: { kind: "page" | "sheet" | "document"; total: number; read: number };
+  characters: number;
+  blocks: number;
+  status: "complete" | "partial" | "unreadable";
+  gaps: CoverageGap[];
+}
+
+export interface CoverageGap {
+  kind: string;
+  level: "gap" | "note";
+  where: string | null;
+  detail: string;
+}
+
+/** What a document looks like — mirrors core's `DocumentPreview`. Never used to anchor findings. */
+export type DocumentPreview =
+  | { kind: "pdf" }
+  | { kind: "html"; html: string; messages: string[] }
+  | { kind: "sheets"; sheets: PreviewSheet[] };
+
+export interface PreviewSheet {
+  name: string;
+  hidden: boolean;
+  columns: string[];
+  rows: { rowNumber: number; cells: Record<string, string> }[];
+  truncatedRows: number;
+}
+
+/** A device and its documents. Scopes documents, the change ledger and the map. */
+export interface Project {
+  projectId: string;
+  name: string;
+  createdAt: string;
+  records: number;
+}
+
+/** `?project=` for the project-scoped list endpoints. */
+const inProject = (project: string): string => `project=${encodeURIComponent(project)}`;
 
 export interface RecordSummary {
   recordId: string;
@@ -355,6 +430,10 @@ export interface RecordSummary {
   revision: string | null;
   runs: number;
   lastRunAt: string | null;
+  format: string | null;
+  coverageStatus: Coverage["status"] | null;
+  /** Null until written (in the background, after upload) or without a model credential. */
+  description: DocumentDescription | null;
 }
 
 export interface Rule {
@@ -422,6 +501,7 @@ export interface UploadResult {
   pageCount: number | null;
   blocks: number;
   warning: string | null;
+  coverage: Coverage;
 }
 
 /**
@@ -492,8 +572,28 @@ export const api = {
     }),
   logout: () => json<{ ok: true }>("/api/logout", { method: "POST" }),
 
-  records: () => json<RecordSummary[]>("/api/records"),
+  projects: () => json<Project[]>("/api/projects"),
+  createProject: (name: string) =>
+    json<Project>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  records: (project: string) => json<RecordSummary[]>(`/api/records?${inProject(project)}`),
   record: (recordId: string) => json<RecordDetail>(`/api/records/${recordId}`),
+  runSummary: (runId: string) => json<RunSummary>(`/api/runs/${runId}/summary`),
+  descriptionStatus: () =>
+    json<{ available: boolean; running: boolean; pending: number }>("/api/descriptions/status"),
+  preview: (recordId: string) => json<DocumentPreview>(`/api/records/${recordId}/preview`),
+  /**
+   * A PDF's original bytes, for the previewer to draw. Fetched with
+   * credentials so the session cookie rides along on this cross-origin request.
+   */
+  pdfBytes: async (recordId: string): Promise<ArrayBuffer> => {
+    const res = await fetch(`${API_URL}/api/records/${recordId}/file`, { credentials: "include" });
+    if (res.status === 401) throw new AuthError();
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+    }
+    return res.arrayBuffer();
+  },
   findings: (runId: string) => json<Finding[]>(`/api/runs/${runId}/findings`),
   rule: (ruleId: string) => json<Rule>(`/api/rules/${ruleId}`),
   rules: () => json<CorpusRule[]>("/api/rules"),
@@ -508,9 +608,10 @@ export const api = {
     }),
 
   // Uploads use FormData, so they bypass the JSON helper's Content-Type.
-  uploadRecord: async (file: File, recordType: string): Promise<UploadResult> => {
+  uploadRecord: async (file: File, recordType: string, project: string): Promise<UploadResult> => {
     const form = new FormData();
     form.append("recordType", recordType);
+    form.append("project", project);
     form.append("file", file);
     const res = await fetch(`${API_URL}/api/records`, {
       method: "POST",
@@ -604,15 +705,15 @@ export const api = {
 
   // Cumulative change ledger. Note there is deliberately no method that returns
   // a submit / don't-submit determination — the tool never computes one.
-  baselines: () => json<Baseline[]>("/api/baselines"),
-  createBaseline: (body: {
+  baselines: (project: string) => json<Baseline[]>(`/api/baselines?${inProject(project)}`),
+  createBaseline: (project: string, body: {
     device: string;
     clearanceId: string;
     clearedAt?: string;
     note?: string;
     threshold?: number;
     thresholdSource?: string;
-  }) => json<Baseline>("/api/baselines", { method: "POST", body: JSON.stringify(body) }),
+  }) => json<Baseline>(`/api/baselines?${inProject(project)}`, { method: "POST", body: JSON.stringify(body) }),
   assessment: (baselineId: string) =>
     json<CumulativeAssessment>(`/api/baselines/${baselineId}/assessment`),
   setThreshold: (baselineId: string, threshold: number, thresholdSource: string | null) =>
@@ -694,5 +795,5 @@ export const api = {
     ),
 
   // Cross-document reference map.
-  graph: () => json<Graph>("/api/graph"),
+  graph: (project: string) => json<Graph>(`/api/graph?${inProject(project)}`),
 };

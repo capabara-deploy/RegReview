@@ -1,14 +1,18 @@
 import { readFile } from "node:fs/promises";
-import { basename, extname } from "node:path";
-import type { Block, RecordDoc, RecordType } from "../types.js";
+import { basename } from "node:path";
+import type { Block, Coverage, CoverageGap, RecordDoc, RecordType } from "../types.js";
+import { buildCoverage, coverageWarning, formatRanges } from "./coverage.js";
+import { decodeText, detectFormat, type SupportedFormat } from "./detect.js";
+import { inspectDocx } from "./docx.js";
 import { extractPdf } from "./pdf.js";
 import { blockify, normalizeText, recordFromText, sha256Hex } from "./text.js";
+import { extractXlsx } from "./xlsx.js";
 
 /**
  * Reading a customer document, whatever format it arrives in.
  *
- * Real quality records are .docx and .pdf. Supporting only text and Markdown
- * meant nothing a customer could actually send could be reviewed.
+ * Real quality records are .docx, .pdf and .xlsx. Supporting only text and
+ * Markdown meant nothing a customer could actually send could be reviewed.
  *
  * The invariant every format must preserve: produce ONE canonical
  * `normalizedText`, and blocks whose offsets index into exactly that string.
@@ -17,9 +21,12 @@ import { blockify, normalizeText, recordFromText, sha256Hex } from "./text.js";
  * a single coordinate system. A format that produced a slightly different
  * rendering than the one it computed offsets against would put highlights on the
  * wrong words, and it would do so quietly.
+ *
+ * The second invariant: every extraction says what it did NOT read (`coverage`,
+ * stored on the record). See `Coverage` in types.ts for why.
  */
 
-export type SupportedFormat = "text" | "markdown" | "docx" | "pdf";
+export type { SupportedFormat } from "./detect.js";
 
 export interface ExtractionResult {
   record: RecordDoc;
@@ -27,24 +34,18 @@ export interface ExtractionResult {
   format: SupportedFormat;
   /** Page count, for paginated formats. */
   pageCount?: number;
-  /** Set when a document appears to have no extractable text layer. */
+  coverage: Coverage;
+  /** One-sentence summary of the coverage gaps, when there are any. */
   warning?: string;
 }
 
-export function detectFormat(path: string): SupportedFormat | undefined {
-  switch (extname(path).toLowerCase()) {
-    case ".pdf":
-      return "pdf";
-    case ".docx":
-      return "docx";
-    case ".md":
-    case ".markdown":
-      return "markdown";
-    case ".txt":
-    case "":
-      return "text";
-    default:
-      return undefined;
+/** Thrown for a file whose bytes are not a format we read. `message` is user-facing. */
+export class UnsupportedFormatError extends Error {
+  constructor(
+    readonly kind: string,
+    message: string,
+  ) {
+    super(message);
   }
 }
 
@@ -55,28 +56,58 @@ function recordId(path: string): string {
 /**
  * Extract a reviewable record from a file.
  *
- * Rejects unknown extensions rather than guessing. A .doc (legacy binary Word)
- * or .xls silently read as UTF-8 produces mojibake that looks like a document
- * and would be reviewed as one.
+ * The format comes from the bytes (see detect.ts); `filename` is the name the
+ * file arrived with, which may differ from the stored path and is only a hint.
+ * Unknown formats are rejected with a message saying what the file is, rather
+ * than guessed at.
  */
 export async function extractRecord(args: {
   path: string;
   recordType?: RecordType;
+  filename?: string;
 }): Promise<ExtractionResult> {
-  const format = detectFormat(args.path);
-  if (!format) {
-    throw new Error(
-      `unsupported file type: ${extname(args.path) || "(no extension)"}. ` +
-        `Supported: .pdf, .docx, .md, .txt. ` +
-        `Legacy .doc and .xls are not supported — convert them first.`,
-    );
-  }
+  const bytes = new Uint8Array(await readFile(args.path));
+  const filename = basename(args.filename ?? args.path);
+  const detection = detectFormat(bytes, filename);
+  if (!detection.ok) throw new UnsupportedFormatError(detection.kind, detection.message);
 
-  const filename = basename(args.path);
+  const { format } = detection;
   const id = recordId(args.path);
+  const recordType = args.recordType ?? "unknown";
+
+  const finish = (args2: {
+    normalizedText: string;
+    blocks: Block[];
+    units: Coverage["units"];
+    gaps: CoverageGap[];
+    pageCount?: number;
+    /** Prose formats re-derive metadata from the text; see buildRecord. */
+    record?: RecordDoc;
+  }): ExtractionResult => {
+    const coverage = buildCoverage({
+      format,
+      declaredExtension: detection.mismatchedExtension,
+      units: args2.units,
+      normalizedText: args2.normalizedText,
+      blocks: args2.blocks.length,
+      gaps: args2.gaps,
+    });
+    const record =
+      args2.record ??
+      buildRecord({ recordId: id, filename, storedPath: args.path, normalizedText: args2.normalizedText, recordType });
+    record.coverage = coverage;
+    const warning = coverageWarning(filename, coverage);
+    return {
+      record,
+      blocks: args2.blocks,
+      format,
+      coverage,
+      ...(args2.pageCount !== undefined ? { pageCount: args2.pageCount } : {}),
+      ...(warning ? { warning } : {}),
+    };
+  };
 
   if (format === "pdf") {
-    const data = new Uint8Array(await readFile(args.path));
     // Imported here, not at module scope: pdfjs's Node build is heavy and has
     // import side effects, and most documents are not PDFs.
     const pdfjsLib = (await import(
@@ -97,7 +128,8 @@ export async function extractRecord(args: {
       import.meta.url,
     ).href;
 
-    const extracted = await extractPdf(data, pdfjsLib, { standardFontDataUrl });
+    // pdfjs takes ownership of (detaches) the buffer it is given, so it gets a copy.
+    const extracted = await extractPdf(bytes.slice(), pdfjsLib, { standardFontDataUrl });
 
     const blocks: Block[] = extracted.blocks.map((b, i) => ({
       ...b,
@@ -105,26 +137,31 @@ export async function extractRecord(args: {
       recordId: id,
     }));
 
-    return {
-      record: buildRecord({
-        recordId: id,
-        filename,
-        storedPath: args.path,
-        normalizedText: extracted.normalizedText,
-        recordType: args.recordType ?? "unknown",
-      }),
+    const gaps: CoverageGap[] = [];
+    // A fully scanned PDF is reported by the "unreadable" status; this is for
+    // the partial case, which is the one that otherwise hides.
+    if (extracted.emptyPages.length > 0 && extracted.emptyPages.length < extracted.pageCount) {
+      gaps.push({
+        kind: "image_only_pages",
+        level: "gap",
+        where: `page${extracted.emptyPages.length === 1 ? "" : "s"} ${formatRanges(extracted.emptyPages)}`,
+        detail:
+          `${extracted.emptyPages.length} page(s) have no text layer — scanned or image-only — and were not read. ` +
+          "OCR is not available yet.",
+      });
+    }
+
+    return finish({
+      normalizedText: extracted.normalizedText,
       blocks,
-      format,
+      units: {
+        kind: "page",
+        total: extracted.pageCount,
+        read: extracted.pageCount - extracted.emptyPages.length,
+      },
+      gaps,
       pageCount: extracted.pageCount,
-      ...(extracted.likelyScanned
-        ? {
-            warning:
-              `"${filename}" has ${extracted.pageCount} page(s) but almost no extractable ` +
-              `text — it is very likely a scan. Reviewing it will produce no findings, ` +
-              `which must not be read as a clean result. OCR it first.`,
-          }
-        : {}),
-    };
+    });
   }
 
   if (format === "docx") {
@@ -133,38 +170,52 @@ export async function extractRecord(args: {
     // transformation between the string offsets are computed against and the
     // string the reviewer sees is a chance for highlights to drift.
     const mammoth = await import("mammoth");
-    const { value } = await mammoth.extractRawText({ path: args.path });
-    const normalizedText = normalizeText(value);
-    return {
-      record: buildRecord({
-        recordId: id,
-        filename,
-        storedPath: args.path,
-        normalizedText,
-        recordType: args.recordType ?? "unknown",
-      }),
+    const { value } = await mammoth.extractRawText({ buffer: Buffer.from(bytes) });
+    const inspection = inspectDocx(bytes);
+    // Header/footer text goes first: it is where a Word record usually states
+    // its own document number and revision, which mammoth never sees.
+    const head = inspection.headerFooterText.join("\n");
+    const normalizedText = normalizeText(head ? `${head}\n\n${value}` : value);
+    return finish({
+      normalizedText,
       blocks: blockify(id, normalizedText),
-      format,
-      ...(normalizedText.replace(/\s/g, "").length < 40
-        ? {
-            warning:
-              `"${filename}" yielded almost no text. If the content is images or ` +
-              `embedded objects, it cannot be reviewed as written.`,
-          }
-        : {}),
-    };
+      units: { kind: "document", total: 1, read: 1 },
+      gaps: inspection.gaps,
+    });
+  }
+
+  if (format === "xlsx") {
+    const extracted = extractXlsx(bytes, id);
+    return finish({
+      normalizedText: extracted.normalizedText,
+      blocks: extracted.blocks,
+      units: { kind: "sheet", total: extracted.sheetsTotal, read: extracted.sheetsRead },
+      gaps: extracted.gaps,
+    });
   }
 
   // Text and Markdown.
-  const raw = await readFile(args.path, "utf8");
-  const built = recordFromText({
-    recordId: id,
-    filename,
-    storedPath: args.path,
-    raw,
-    ...(args.recordType ? { recordType: args.recordType } : {}),
+  const encoding = detection.encoding ?? "utf-8";
+  const raw = decodeText(bytes, encoding);
+  const built = recordFromText({ recordId: id, filename, storedPath: args.path, raw, recordType });
+  const gaps: CoverageGap[] =
+    encoding === "windows-1252"
+      ? [
+          {
+            kind: "legacy_encoding",
+            level: "note",
+            where: null,
+            detail: "Not UTF-8; decoded as Windows-1252. Check that accented characters and symbols read correctly.",
+          },
+        ]
+      : [];
+  return finish({
+    normalizedText: built.record.normalizedText,
+    blocks: built.blocks,
+    units: { kind: "document", total: 1, read: 1 },
+    gaps,
+    record: built.record,
   });
-  return { record: built.record, blocks: built.blocks, format };
 }
 
 /**
@@ -196,5 +247,9 @@ function buildRecord(args: {
   };
 }
 
+export { buildCoverage, coverageWarning } from "./coverage.js";
+export { detectFormat, type Detection } from "./detect.js";
 export { extractPdf } from "./pdf.js";
+export { buildPreview, type DocumentPreview, type PreviewSheet } from "./preview.js";
+export { findHeader, openWorkbook, type Sheet, type SheetInfo, type Workbook } from "./xlsxReader.js";
 export * from "./text.js";

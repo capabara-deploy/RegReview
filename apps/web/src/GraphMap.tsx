@@ -107,10 +107,13 @@ interface Hub {
 }
 
 export function GraphMap({
+  project,
   target,
   onNavigate,
   onAuthError,
 }: {
+  /** The selected project; the map draws only its documents and ledger. */
+  project: string;
   /** Node id from the address bar, so a map link opens with that node open. */
   target: string | null;
   onNavigate: (page: Page, target?: string | null) => void;
@@ -134,13 +137,13 @@ export function GraphMap({
   useEffect(() => {
     void (async () => {
       try {
-        setGraph(await api.graph());
+        setGraph(await api.graph(project));
       } catch (e) {
         if (e instanceof AuthError) return onAuthError();
         setError((e as Error).message);
       }
     })();
-  }, [onAuthError]);
+  }, [onAuthError, project]);
 
   const layout = useMemo(() => {
     if (!graph) return null;

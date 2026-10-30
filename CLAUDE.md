@@ -36,9 +36,29 @@ Two different stores, for two different reasons:
 - **Neon Postgres, three databases, split by sensitivity** — `corpus` (public regulatory reference data: CFR text, FDA citation frequencies, the authored rule set), `customer` (uploaded records, blocks, facts, runs, findings — findings embed verbatim customer quotes, so they are customer content), and `sops` (uploaded procedures and the rules derived from them). Open them with `getCorpusDb()` / `getCustomerDb()` / `getSopsDb()`; there is no single `getDb()`.
 - **MongoDB** — reviewer accounts, sessions, and the hourly review quota, in `apps/server` only. Core never touches it.
 
+**Local mode (`REGREVIEW_LOCAL=1`) needs neither.** Each of the three databases becomes an embedded Postgres (PGlite — real Postgres compiled to WASM) directory under `data/local/<name>`, and the server keeps accounts/sessions/quota in a fourth (`data/local/accounts`, see `apps/server/src/localAccounts.ts`) instead of MongoDB. Same SQL dialect, so schemas and queries are shared unchanged; the sign-in flow is the real one, not an auth-disabled path. `npm run setup:local` builds a working database from nothing (it refuses to run without the flag, since every step writes). Two things to know: PGlite is **single-process** — stop `dev:server` before running a CLI against the same directory — and the server refuses a non-loopback `HOST` in local mode. `pgDb.ts` unrefs PGlite's self-rearming internal Postgres timer; without that, every CLI that ends without `process.exit()` hangs forever.
+
 `db/pgDb.ts` is a better-sqlite3-shaped wrapper: `db.prepare(sql).run/get/all()` and `db.transaction(fn)()` behave as before, just async, and `?` placeholders are rewritten to `$1..$n`. So porting a call site is "add async/await", not "rewrite the query" — but note that **`fn` passed to `transaction()` must be async**, since AsyncLocalStorage is what threads the checked-out client through nested `prepare()` calls.
 
 **A foreign key no longer protects findings from rule deletion.** `findings.rule_id` lives in `customer` and `rules` lives in `sops`; Postgres cannot enforce a constraint across databases. The explicit "is this rule still referenced" check in `ingestSop` is now the only thing preventing an orphaned finding. Don't remove it as redundant.
+
+## Projects (`projects.ts`)
+
+A project is a device and its documents. `records.project_id` and `baselines.project_id` scope the document list, uploads, the change ledger and the map (changes and submissions follow their baseline; a clearance's successor baseline inherits it). The API takes `?project=` (or a `project` form field on upload); **absent means `northlake-vp400`**, which is where everything predating projects lives and what the CLIs and eval harness still write to. A record keeps its project when its file is replaced. **Procedures are deliberately not per-project** — they are the company's SOPs and govern every device. The web picker lists projects from `/api/projects`, creates them inline, and remembers the choice in localStorage only as a convenience.
+
+## Ingesting documents (`packages/core/src/extract/`)
+
+- **The bytes decide the format, never the extension** (`detect.ts`). A PDF named `.docx` is read as a PDF and the mismatch is noted; images, legacy OLE2 Office files, RTF, HTML, PPTX, ODF and zips are refused with a message naming what the file actually is and how to convert it. The server deletes a rejected upload's bytes.
+- **Every extraction produces a `Coverage` report** (`types.ts`, stored as `records.coverage`), with status `complete` / `partial` / `unreadable` and a list of `gap`s (content the review never saw: image-only PDF pages, DOCX images, embedded objects, comments, unaccepted tracked changes, uncalculated formulas, rows past the limit) and `note`s (read, but the manner matters: hidden sheets, cached formula values, Windows-1252 text). The UI shows it beside the findings and marks partly-read documents in the list. This exists because a clean review of a document we only half read is the most dangerous thing this product can output — never let a new format skip it.
+- **Spreadsheets** (`xlsx.ts`, reader in `xlsxReader.ts` — hand-rolled, see its header for why) render as one block per row, `Row 7 | ID: FM-201 | … | S: 4`, with header labels repeated so a value means something on its own. `blocks.anchor` holds the row range and `blocks.cells` each cell's offsets, so a finding resolves to `FMEA!D7`. Values are verbatim; formulas are never evaluated (an uncalculated one renders as its formula plus "no saved value"). `XLSX_ROW_LIMIT` bounds cost and reports what it cut.
+- `npm run check:formats` (text/offsets per format) and `npm run check:ingest` (detection, coverage, cell anchors) are the regression checks; `npm run fixtures:xlsx` regenerates the FMEA workbook fixture.
+
+## Plain-language summaries (`documentSummary.ts`)
+
+Reviewers found a long findings list hard to read as a whole, so two summaries sit on top of it. **Neither is a finding** — no severity, no anchor, never in `findings`.
+
+- **Document description** (`records.description`, valid only while its `sha256` matches): what the document is and what it's for. Written in the background by the server after upload and on boot (`kickDescriber`), shown on the run page, the previewer and the findings page. Describes, never evaluates.
+- **Run summary** (`runs.summary`, valid only while its findings basis — ids + rejected flags — matches): up to three biggest issues and whether the document appears to do its job. Two load-bearing guards, same shape as the hallucination guard and `SCORE_FLOORS`: an issue that cites no real, un-rejected finding of the run is **dropped** (it may compress the review, never extend it), and the purpose answer is **capped in code** — never "supports" with an open high finding or a partly-read document, always "cannot tell" for an offline run or unreadable document. Worded as a reading of the review: never compliant / acceptable / audit-ready, and the UI always shows that caveat. Offline runs and servers without a credential get a deterministic fallback, no model call.
 
 ## Cumulative change ledger and cross-document graph
 
@@ -63,6 +83,7 @@ Workspaces import `@regreview/core` via its **dist output**, so core builds firs
 
 ```bash
 npm run build            # tsc -b everything
+npm run setup:local      # REGREVIEW_LOCAL=1 only: local DBs + corpus + Northlake demo data, offline
 npm run migrate          # create/upgrade all three Postgres schemas; seeds SAMPLE-* SOPs
 npm run user:create -- <username> <password>   # a reviewer account (MongoDB)
 npm run ingest:observations   # FDA Inspectional Observation data (severity weights + eval labels)
@@ -133,6 +154,7 @@ person configures blind. Everything except the auth/deploy block is read through
 | `ANTHROPIC_API_KEY` | Unset it to fall back to an `ant auth login` profile. Set-but-*empty* still wins and authenticates with an empty key |
 | `ANTHROPIC_AUTH_TOKEN` | Accepted by the server as an alternative credential |
 | `REGREVIEW_MODEL` / `REGREVIEW_EFFORT` | Pinned; part of a run's identity |
+| `REGREVIEW_LOCAL` / `REGREVIEW_LOCAL_DATA_DIR` | `1` ⇒ embedded databases + local accounts, no Neon/Mongo (see Storage). Dir defaults to `./data/local` |
 | `NEON_DATABASE_URL` / `NEON_CUSTOMER_DATABASE_URL` / `NEON_SOPS_DATABASE_URL` | The three databases. Read lazily, so a CLI that never opens one doesn't need it set |
 | `NEON_OLD_DATABASE_URL` | The frozen pre-migration SQLite archive. Not read by the running app |
 | `MONGODB_URI` / `MONGODB_DB` | Reviewer accounts, sessions, quota |

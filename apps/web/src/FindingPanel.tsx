@@ -15,10 +15,13 @@ import { SEVERITY_MARK } from "./highlight";
  */
 export function FindingPanel({
   finding,
+  location,
   onClose,
   onStatus,
 }: {
   finding: Finding;
+  /** Spreadsheet cell or row the quote came from, e.g. "FMEA!D7". */
+  location: string | null;
   onClose: () => void;
   onStatus: (f: Finding, status: FindingStatus, note?: string) => Promise<void>;
 }) {
@@ -55,6 +58,11 @@ export function FindingPanel({
           <span aria-hidden="true">{SEVERITY_MARK[finding.severity]}</span> {finding.severity}
         </span>
         <span className="panel-cat">{finding.category}</span>
+        {location && (
+          <code className="panel-loc" title="Spreadsheet cell this finding quotes">
+            {location}
+          </code>
+        )}
         <button className="close" onClick={onClose} aria-label="Back to list">
           ×
         </button>

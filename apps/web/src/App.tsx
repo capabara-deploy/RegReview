@@ -5,6 +5,7 @@ import {
   type Finding,
   type FindingStatus,
   type Job,
+  type Project,
   type RecordDetail,
   type RecordSummary,
 } from "./api";
@@ -23,12 +24,20 @@ import {
 } from "./routes";
 
 /**
- * Projects — a device and its documents. One for now (every uploaded record
- * belongs to it), but modeled as a list and lifted into the top bar so the
- * scope is explicit and adding a second project later is a data change, not a
- * UI rebuild.
+ * Projects — a device and its documents. Listed by the server; the selection
+ * scopes the document list, uploads, the change ledger and the map, and is
+ * remembered per browser (a convenience only — the server never relies on it).
  */
-const PROJECTS = [{ id: "northlake-vp400", name: "Northlake VP-400" }];
+const DEFAULT_PROJECT = "northlake-vp400";
+const PROJECT_KEY = "regreview.project";
+
+function rememberedProject(): string {
+  try {
+    return localStorage.getItem(PROJECT_KEY) ?? DEFAULT_PROJECT;
+  } catch {
+    return DEFAULT_PROJECT;
+  }
+}
 
 /**
  * The shell: navigation, the record/run the findings view is showing, and the
@@ -65,7 +74,23 @@ export function App() {
     if (!window.location.hash) navigateTo(DEFAULT_ROUTE.page);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const [project, setProject] = useState(PROJECTS[0]!.id);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [project, setProjectState] = useState(rememberedProject);
+  // Inline "new project" form in the top bar; null when closed.
+  const [newProjectName, setNewProjectName] = useState<string | null>(null);
+
+  const setProject = useCallback((id: string) => {
+    setProjectState(id);
+    try {
+      localStorage.setItem(PROJECT_KEY, id);
+    } catch {
+      // Private window or blocked storage: the choice just isn't remembered.
+    }
+    // What was open belonged to the previous project.
+    setRecord(null);
+    setRunId(null);
+    setFindings([]);
+  }, []);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [record, setRecord] = useState<RecordDetail | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -89,12 +114,42 @@ export function App() {
 
   const refreshRecords = useCallback(async () => {
     try {
-      setRecords(await api.records());
+      setRecords(await api.records(project));
     } catch (e) {
       if (e instanceof AuthError) return setUsername(null);
       setError((e as Error).message);
     }
-  }, []);
+  }, [project]);
+
+  const refreshProjects = useCallback(async () => {
+    try {
+      const list = await api.projects();
+      setProjects(list);
+      // A remembered project that no longer exists falls back to the first.
+      if (list.length > 0 && !list.some((p) => p.projectId === project)) setProject(list[0]!.projectId);
+    } catch (e) {
+      if (e instanceof AuthError) return setUsername(null);
+      setError((e as Error).message);
+    }
+  }, [project, setProject]);
+
+  useEffect(() => {
+    if (username) void refreshProjects();
+  }, [username, refreshProjects]);
+
+  const createProject = async (): Promise<void> => {
+    const name = newProjectName?.trim();
+    if (!name) return;
+    try {
+      const created = await api.createProject(name);
+      setNewProjectName(null);
+      await refreshProjects();
+      setProject(created.projectId);
+      navigate("run");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   /**
    * Open a document and show one of its runs.
@@ -332,19 +387,52 @@ export function App() {
           <span className="tagline">pre-inspection review</span>
         </div>
 
-        {/* Project scope. One project for now — every document belongs to it —
-            but it sits in the top bar so it governs every page as more are
-            added: the file tree, the map, the ledger all read from here. */}
-        <label className="project-picker" title="Project — the device and its documents">
-          <span className="project-label">Project</span>
-          <select value={project} onChange={(e) => setProject(e.target.value)}>
-            {PROJECTS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {/* Project scope. It sits in the top bar because it governs every
+            page: the document list, uploads, the ledger and the map all read
+            from here. Procedures are company-wide and ignore it. */}
+        {newProjectName === null ? (
+          <label className="project-picker" title="Project — the device and its documents">
+            <span className="project-label">Project</span>
+            <select
+              value={project}
+              onChange={(e) => {
+                if (e.target.value === "__new__") setNewProjectName("");
+                else setProject(e.target.value);
+              }}
+            >
+              {projects.map((p) => (
+                <option key={p.projectId} value={p.projectId}>
+                  {p.name}
+                </option>
+              ))}
+              <option value="__new__">+ New project…</option>
+            </select>
+          </label>
+        ) : (
+          <form
+            className="project-picker project-new"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void createProject();
+            }}
+          >
+            <span className="project-label">New project</span>
+            <input
+              autoFocus
+              value={newProjectName}
+              placeholder="Name, e.g. the device"
+              maxLength={80}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setNewProjectName(null)}
+            />
+            <button type="submit" className="act accept" disabled={!newProjectName.trim()}>
+              Create
+            </button>
+            <button type="button" className="link" onClick={() => setNewProjectName(null)}>
+              Cancel
+            </button>
+          </form>
+        )}
 
         <nav className="viewnav">
           <button
@@ -389,6 +477,7 @@ export function App() {
 
       {page === "run" && (
         <RunReview
+          project={project}
           records={records}
           jobs={jobs}
           onStartJob={trackJob}
@@ -414,6 +503,8 @@ export function App() {
 
       {page === "changes" && (
         <ChangeLedger
+          key={project}
+          project={project}
           target={route.target}
           onNavigate={navigate}
           onAuthError={() => setUsername(null)}
@@ -422,6 +513,8 @@ export function App() {
 
       {page === "map" && (
         <GraphMap
+          key={project}
+          project={project}
           target={route.target}
           onNavigate={navigate}
           onAuthError={() => setUsername(null)}

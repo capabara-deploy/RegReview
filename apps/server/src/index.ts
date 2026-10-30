@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -19,6 +19,16 @@ import {
 import { consumeQuota, ensureQuotaIndexes, initQuota, peekQuota, resetQuota } from "./quota.js";
 import {
   addChange,
+  createProject,
+  DEFAULT_PROJECT_ID,
+  listProjects,
+  projectExists,
+  ensureDescription,
+  getRunSummary,
+  recordsNeedingDescription,
+  summariesAvailable,
+  type DocumentDescription,
+  buildPreview,
   advanceStage,
   attachChanges,
   categoriesForRules,
@@ -30,7 +40,6 @@ import {
   cumulativeAssessment,
   deleteSop,
   Determination,
-  detectFormat,
   effectiveScore,
   extractRecord,
   fileSubmission,
@@ -58,6 +67,7 @@ import {
   runReview,
   saveRecord,
   saveSuggestedScore,
+  UnsupportedFormatError,
   scoreChange,
   setDetermination,
   setFindingStatus,
@@ -122,13 +132,108 @@ if (PUBLIC && !AUTH_ENABLED) {
   );
   process.exit(1);
 }
+// Local mode is a dev/test convenience: its databases and accounts live in
+// files on this machine, with none of the deployment's backups or isolation.
+if (PUBLIC && config.local) {
+  console.error(
+    `Refusing to start: REGREVIEW_LOCAL=1 keeps every database on this machine's\n` +
+      `disk and is for local testing only, but HOST is ${HOST}. Bind to 127.0.0.1,\n` +
+      `or unset REGREVIEW_LOCAL to use the configured Neon/MongoDB databases.`,
+  );
+  process.exit(1);
+}
 
 await ensureAuthIndexes();
-if (AUTH_ENABLED) {
+if (AUTH_ENABLED && !config.local) {
   initQuota(await getMongoDb());
   await ensureQuotaIndexes();
 }
 await Promise.all([migrateCorpus(), migrateCustomer(), migrateSops()]);
+
+/**
+ * Writes plain-language descriptions for documents that lack one, in the
+ * background (documentSummary.ts). Kicked on boot and after every upload, and
+ * a no-op without a model credential. Two at a time: each is a short read, and
+ * a first boot against a full project shouldn't open thirty requests at once.
+ * A kick while it is running just schedules one more pass, so uploads made
+ * mid-pass are picked up.
+ */
+const describer = { running: false, again: false, pending: 0 };
+
+function kickDescriber(): void {
+  if (!summariesAvailable()) return;
+  if (describer.running) {
+    describer.again = true;
+    return;
+  }
+  describer.running = true;
+  void (async () => {
+    try {
+      do {
+        describer.again = false;
+        const queue = await recordsNeedingDescription();
+        describer.pending = queue.length;
+        const worker = async (): Promise<void> => {
+          for (let id = queue.shift(); id; id = queue.shift()) {
+            try {
+              await ensureDescription(id);
+            } catch (err) {
+              console.error(`[describe] ${id}: ${(err as Error).message}`);
+            }
+            describer.pending = queue.length;
+          }
+        };
+        await Promise.all([worker(), worker()]);
+      } while (describer.again);
+    } finally {
+      describer.running = false;
+      describer.pending = 0;
+    }
+  })();
+}
+
+/**
+ * Fill in coverage for documents uploaded before it was recorded, by
+ * re-reading their original files. Coverage is only written when the
+ * re-extraction produces exactly the stored text (same sha256): the report must
+ * describe the text the findings were anchored to, so a document whose
+ * extraction has since changed keeps "unknown" until it is replaced. Blocks and
+ * findings are never touched. Deterministic and offline; a no-op once every
+ * record has coverage, so it is cheap on every boot.
+ */
+async function backfillCoverage(): Promise<void> {
+  const db = getCustomerDb();
+  const rows = await db
+    .prepare(`SELECT record_id, filename, stored_path, sha256, record_type FROM records WHERE coverage IS NULL`)
+    .all<{ record_id: string; filename: string; stored_path: string; sha256: string; record_type: string }>();
+  let filled = 0;
+  for (const r of rows) {
+    if (!existsSync(r.stored_path)) continue;
+    try {
+      const extracted = await extractRecord({
+        path: r.stored_path,
+        filename: r.filename,
+        recordType: r.record_type as RecordDoc["recordType"],
+      });
+      if (extracted.record.sha256 !== r.sha256) continue;
+      await db
+        .prepare(`UPDATE records SET coverage = ?, format = ? WHERE record_id = ? AND coverage IS NULL`)
+        .run(JSON.stringify(extracted.coverage), extracted.format, r.record_id);
+      filled++;
+    } catch {
+      // Unreadable now (format support changed, file damaged): leave it unknown.
+    }
+  }
+  if (rows.length > 0) console.log(`[coverage] backfilled ${filled} of ${rows.length} record(s) without coverage`);
+}
+
+await backfillCoverage();
+kickDescriber();
+
+/** Start a finished run's summary now, so it is usually ready when the results open. */
+function prepareRunSummary(runId: string): void {
+  void getRunSummary(runId).catch((err) => console.error(`[summary] ${runId}: ${(err as Error).message}`));
+}
 
 /**
  * Reconcile runs left mid-flight by a previous process.
@@ -341,6 +446,19 @@ interface RecordRow {
   revision: string | null;
   normalized_text: string;
   created_at: string;
+  format: string | null;
+  /** JSON `Coverage`; null for records extracted before coverage existed. */
+  coverage: string | null;
+  sha256: string;
+  /** JSON `DocumentDescription`; current only while its sha256 matches. */
+  description: string | null;
+}
+
+/** The record's description if it was written for its current text, as sent to the client. */
+function currentDescription(r: { sha256: string; description: string | null }): { label: string; summary: string } | null {
+  if (!r.description) return null;
+  const d = JSON.parse(r.description) as DocumentDescription;
+  return d.sha256 === r.sha256 ? { label: d.label, summary: d.summary } : null;
 }
 
 interface RunRow {
@@ -363,22 +481,51 @@ interface BlockRow {
   char_start: number;
   char_end: number;
   heading: string | null;
+  anchor: string | null;
+  cells: string | null;
 }
 
+/**
+ * The project a request is scoped to: `?project=` (or a `project` form/body
+ * field on uploads). Absent means the original project, so older clients and
+ * the CLIs keep working unchanged.
+ */
+function projectOf(req: Request): string {
+  const fromQuery = typeof req.query["project"] === "string" ? req.query["project"] : undefined;
+  const fromBody = typeof req.body?.["project"] === "string" ? (req.body["project"] as string) : undefined;
+  return fromQuery || fromBody || DEFAULT_PROJECT_ID;
+}
+
+app.get("/api/projects", async (_req, res) => {
+  res.json(await listProjects());
+});
+
+const ProjectBody = z.object({ name: z.string().trim().min(1).max(80) });
+
+app.post("/api/projects", async (req, res) => {
+  const parsed = ProjectBody.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "a project needs a name (up to 80 characters)" });
+  res.status(201).json(await createProject(parsed.data.name));
+});
+
 /** Documents that have at least one completed run, newest activity first. */
-app.get("/api/records", async (_req, res) => {
+app.get("/api/records", async (req, res) => {
   const db = getCustomerDb();
+  const project = projectOf(req);
   const rows = await db
     .prepare(
       `SELECT r.record_id, r.filename, r.record_type, r.doc_id, r.revision, r.created_at,
+              r.format, r.coverage, r.sha256, r.description,
               COUNT(DISTINCT run.run_id) AS runs,
               MAX(run.started_at)       AS last_run_at
          FROM records r
          LEFT JOIN runs run ON run.record_id = r.record_id AND run.status = 'complete'
-        GROUP BY r.record_id
+        WHERE r.project_id = ?
+        GROUP BY r.record_id, r.filename, r.record_type, r.doc_id, r.revision, r.created_at,
+                 r.format, r.coverage, r.sha256, r.description
         ORDER BY COALESCE(MAX(run.started_at), r.created_at) DESC`,
     )
-    .all<Omit<RecordRow, "normalized_text"> & { runs: number; last_run_at: string | null }>();
+    .all<Omit<RecordRow, "normalized_text"> & { runs: number; last_run_at: string | null }>(project);
 
   res.json(
     rows.map((r) => ({
@@ -389,6 +536,11 @@ app.get("/api/records", async (_req, res) => {
       revision: r.revision,
       runs: r.runs,
       lastRunAt: r.last_run_at,
+      format: r.format,
+      // The status only: enough for the document list to mark a partly-read
+      // document without shipping every gap for every record.
+      coverageStatus: r.coverage ? (JSON.parse(r.coverage) as { status: string }).status : null,
+      description: currentDescription(r),
     })),
   );
 });
@@ -405,7 +557,7 @@ app.get("/api/records/:recordId", async (req, res) => {
 
   const blocks = await db
     .prepare(
-      `SELECT block_id, record_id, ordinal, char_start, char_end, heading
+      `SELECT block_id, record_id, ordinal, char_start, char_end, heading, anchor, cells
          FROM blocks WHERE record_id = ? ORDER BY ordinal`,
     )
     .all<BlockRow>(recordId);
@@ -434,6 +586,11 @@ app.get("/api/records/:recordId", async (req, res) => {
     recordType: record.record_type,
     docId: record.doc_id,
     revision: record.revision,
+    format: record.format,
+    // What extraction read and what it could not. Shown beside the findings so
+    // a short or empty review of a partly-read document can't pass as clean.
+    coverage: record.coverage ? JSON.parse(record.coverage) : null,
+    description: currentDescription(record),
     // The single canonical rendering. Every offset in every finding indexes
     // into this exact string, so the client must not transform it.
     normalizedText: record.normalized_text,
@@ -443,6 +600,8 @@ app.get("/api/records/:recordId", async (req, res) => {
       charStart: b.char_start,
       charEnd: b.char_end,
       heading: b.heading,
+      anchor: b.anchor,
+      cells: b.cells ? JSON.parse(b.cells) : null,
     })),
     runs: runs.map((r) => ({
       runId: r.run_id,
@@ -458,6 +617,71 @@ app.get("/api/records/:recordId", async (req, res) => {
       error: r.error,
     })),
   });
+});
+
+/**
+ * What a document looks like, for the previewer on the run page. See
+ * core's preview.ts: this is for recognising the document, never for anchoring
+ * findings, and nothing in it goes to the model.
+ */
+app.get("/api/records/:recordId/preview", async (req, res) => {
+  const record = await getCustomerDb()
+    .prepare(`SELECT filename, stored_path FROM records WHERE record_id = ?`)
+    .get<{ filename: string; stored_path: string }>(req.params.recordId);
+  if (!record) return res.status(404).json({ error: "record not found" });
+  if (!existsSync(record.stored_path)) {
+    return res.status(410).json({ error: "the original file is no longer on this server" });
+  }
+  try {
+    res.json(await buildPreview(record.stored_path, record.filename));
+  } catch (err) {
+    res.status(422).json({ error: err instanceof Error ? err.message : "could not preview the document" });
+  }
+});
+
+/**
+ * A PDF's original bytes, for the browser's own PDF viewer. PDF only: it is the
+ * one format the previewer shows unconverted, and serving arbitrary stored
+ * files back is more surface than the previewer needs. Never cached — these
+ * are customer documents.
+ */
+app.get("/api/records/:recordId/file", async (req, res) => {
+  const record = await getCustomerDb()
+    .prepare(`SELECT filename, stored_path FROM records WHERE record_id = ?`)
+    .get<{ filename: string; stored_path: string }>(req.params.recordId);
+  if (!record) return res.status(404).json({ error: "record not found" });
+  if (!existsSync(record.stored_path)) {
+    return res.status(410).json({ error: "the original file is no longer on this server" });
+  }
+  const bytes = readFileSync(record.stored_path);
+  if (!bytes.subarray(0, 1024).toString("latin1").includes("%PDF-")) {
+    return res.status(415).json({ error: "only PDFs are served as original files" });
+  }
+  res.set({
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `inline; filename="${record.filename.replace(/[^\w.-]/g, "_")}"`,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.send(bytes);
+});
+
+/**
+ * The run's plain-language summary: the biggest issues and whether the
+ * document appears to do its job (documentSummary.ts). Written when the run
+ * finishes, rewritten when a finding is rejected or restored. Not a finding.
+ */
+app.get("/api/runs/:runId/summary", async (req, res) => {
+  try {
+    res.json(await getRunSummary(req.params.runId));
+  } catch (err) {
+    res.status(422).json({ error: err instanceof Error ? err.message : "could not summarise this run" });
+  }
+});
+
+/** Whether document descriptions are still being written — the run page polls this. */
+app.get("/api/descriptions/status", (_req, res) => {
+  res.json({ available: summariesAvailable(), running: describer.running, pending: describer.pending });
 });
 
 app.get("/api/runs/:runId/findings", async (req, res) => {
@@ -510,8 +734,8 @@ app.patch("/api/runs/:runId/findings/:findingId", async (req, res) => {
 // determination — that is the manufacturer's call, and no route computes it.
 // ---------------------------------------------------------------------------
 
-app.get("/api/baselines", async (_req, res) => {
-  res.json(await listBaselines());
+app.get("/api/baselines", async (req, res) => {
+  res.json(await listBaselines(undefined, projectOf(req)));
 });
 
 const BaselineBody = z.object({
@@ -527,7 +751,7 @@ const BaselineBody = z.object({
 app.post("/api/baselines", async (req, res) => {
   const parsed = BaselineBody.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message });
-  res.status(201).json(await createBaseline(parsed.data));
+  res.status(201).json(await createBaseline({ ...parsed.data, projectId: projectOf(req) }));
 });
 
 // The escalation threshold belongs to the customer's change-control procedure,
@@ -767,8 +991,8 @@ app.patch("/api/submissions/:submissionId/status", async (req, res) => {
 // Cross-document graph (Phase 3). Read-only. Deterministic reference edges plus
 // per-document finding severity, for the reference map. Computed on read.
 // ---------------------------------------------------------------------------
-app.get("/api/graph", async (_req, res) => {
-  res.json(await loadGraph());
+app.get("/api/graph", async (req, res) => {
+  res.json(await loadGraph(undefined, projectOf(req)));
 });
 
 /** The audit trail for one finding. */
@@ -900,6 +1124,27 @@ const upload = multer({
 });
 
 /**
+ * Extract an upload. The format is decided from the file's bytes (detect.ts);
+ * the original name is passed only as a hint, since the stored name is
+ * collision-proofed.
+ */
+function readUpload(storedPath: string, originalName: string, recordType: RecordDoc["recordType"]) {
+  return extractRecord({ path: storedPath, recordType, filename: basename(originalName) });
+}
+
+/**
+ * Refuse an upload we could not read, and delete its bytes: a rejected
+ * customer document has no reason to stay on this disk. 415 when the file is a
+ * format we don't read — the message names what it actually is — and 422 when
+ * it is a supported format that failed to parse.
+ */
+function rejectUpload(res: Response, storedPath: string, err: unknown) {
+  rmSync(storedPath, { force: true });
+  if (err instanceof UnsupportedFormatError) return res.status(415).json({ error: err.message, kind: err.kind });
+  return res.status(422).json({ error: err instanceof Error ? err.message : "could not read the document" });
+}
+
+/**
  * Upload a record to review.
  *
  * The file is written to the upload directory on local disk and never leaves it;
@@ -912,32 +1157,27 @@ app.post("/api/records", upload.single("file"), async (req, res) => {
   const uploaded = req.file;
   if (!uploaded) return res.status(400).json({ error: "no file in request" });
 
-  if (!detectFormat(uploaded.originalname)) {
-    return res.status(415).json({
-      error: `unsupported file type: ${extname(uploaded.originalname) || "(none)"}. ` +
-        `Supported: .pdf, .docx, .md, .txt`,
-    });
-  }
-
   const parsedType = RecordType.safeParse(req.body["recordType"] ?? "capa");
   const recordType = parsedType.success ? parsedType.data : "capa";
+  const project = projectOf(req);
+  if (!(await projectExists(project))) return res.status(404).json({ error: `no such project: ${project}` });
 
   const storedPath = join(uploadDir, safeStoredName(uploaded.originalname));
   writeFileSync(storedPath, uploaded.buffer);
 
   let extracted;
   try {
-    extracted = await extractRecord({ path: storedPath, recordType });
+    extracted = await readUpload(storedPath, uploaded.originalname, recordType);
   } catch (err) {
-    return res.status(422).json({
-      error: err instanceof Error ? err.message : "could not read the document",
-    });
+    return rejectUpload(res, storedPath, err);
   }
 
   // Show the original filename, not the collision-proofed on-disk name. The
   // stored path keeps the prefixed name; only the display label is cleaned.
   extracted.record.filename = basename(uploaded.originalname);
+  extracted.record.projectId = project;
   await saveRecord(extracted.record, extracted.blocks);
+  kickDescriber();
 
   res.status(201).json({
     recordId: extracted.record.recordId,
@@ -950,6 +1190,7 @@ app.post("/api/records", upload.single("file"), async (req, res) => {
     blocks: extracted.blocks.length,
     // Surfaced so the client can warn the user rather than let a scan look clean.
     warning: extracted.warning ?? null,
+    coverage: extracted.coverage,
   });
 });
 
@@ -972,13 +1213,6 @@ app.post("/api/records/:recordId/replace", upload.single("file"), async (req, re
     .get<{ record_id: string; record_type: string }>(req.params.recordId);
   if (!existing) return res.status(404).json({ error: "record not found" });
 
-  if (!detectFormat(uploaded.originalname)) {
-    return res.status(415).json({
-      error: `unsupported file type: ${extname(uploaded.originalname) || "(none)"}. ` +
-        `Supported: .pdf, .docx, .md, .txt`,
-    });
-  }
-
   const parsedType = RecordType.safeParse(req.body["recordType"] ?? existing.record_type);
   const recordType = parsedType.success ? parsedType.data : (existing.record_type as never);
 
@@ -987,11 +1221,9 @@ app.post("/api/records/:recordId/replace", upload.single("file"), async (req, re
 
   let extracted;
   try {
-    extracted = await extractRecord({ path: storedPath, recordType });
+    extracted = await readUpload(storedPath, uploaded.originalname, recordType);
   } catch (err) {
-    return res.status(422).json({
-      error: err instanceof Error ? err.message : "could not read the document",
-    });
+    return rejectUpload(res, storedPath, err);
   }
 
   // Keep the existing identity: the new file IS this record now.
@@ -1004,6 +1236,7 @@ app.post("/api/records/:recordId/replace", upload.single("file"), async (req, re
     blockId: `${existing.record_id}:b${i}`,
   }));
   const { discardedFindings } = await saveRecord(extracted.record, extracted.blocks);
+  kickDescriber();
 
   res.json({
     recordId: extracted.record.recordId,
@@ -1016,6 +1249,7 @@ app.post("/api/records/:recordId/replace", upload.single("file"), async (req, re
     blocks: extracted.blocks.length,
     discardedFindings,
     warning: extracted.warning ?? null,
+    coverage: extracted.coverage,
   });
 });
 
@@ -1309,6 +1543,7 @@ app.post("/api/records/:recordId/review", async (req, res) => {
       slot.phase = null;
       slot.runId = result.run.runId;
       slot.findingCount = result.findings.length;
+      prepareRunSummary(result.run.runId);
     } catch (err) {
       job.status = "failed";
       job.error = err instanceof Error ? err.message : String(err);
@@ -1457,6 +1692,7 @@ app.post("/api/reviews/batch", async (req, res) => {
         slot.phase = null;
         slot.runId = result.run.runId;
         slot.findingCount = result.findings.length;
+        prepareRunSummary(result.run.runId);
         totalFindings += result.findings.length;
         job.progress.push(`    -> ${result.findings.length} finding(s)`);
       } catch (err) {
@@ -1538,16 +1774,18 @@ const SopTextBody = z.object({
 app.post("/api/sops", upload.single("file"), async (req, res) => {
   if (req.file) {
     const uploaded = req.file;
-    if (!detectFormat(uploaded.originalname)) {
-      return res.status(415).json({ error: "unsupported file type for a procedure" });
-    }
     const appliesTo = parseAppliesTo(String(req.body["appliesTo"] ?? "capa"));
 
     const storedPath = join(uploadDir, safeStoredName(uploaded.originalname));
     writeFileSync(storedPath, uploaded.buffer);
     // Reuse format parsing so a .docx procedure becomes text before clause
     // extraction runs on it.
-    const extracted = await extractRecord({ path: storedPath, recordType: "unknown" });
+    let extracted;
+    try {
+      extracted = await readUpload(storedPath, uploaded.originalname, "unknown");
+    } catch (err) {
+      return rejectUpload(res, storedPath, err);
+    }
     const result = await ingestSop({
       filename: basename(uploaded.originalname),
       storedPath,
@@ -1659,6 +1897,8 @@ async function loadRecord(
     page: (b["page"] as number | null) ?? null,
     bbox: b["bbox"] ? (JSON.parse(b["bbox"] as string) as [number, number, number, number]) : null,
     heading: (b["heading"] as string | null) ?? null,
+    anchor: (b["anchor"] as string | null) ?? null,
+    cells: b["cells"] ? JSON.parse(b["cells"] as string) : null,
   }));
 
   return { record, blocks };
@@ -1690,10 +1930,16 @@ function describeDb(url: string): string {
 
 app.listen(PORT, HOST, () => {
   console.log(`RegReview API on http://${HOST}:${PORT}`);
-  console.log(`  auth      : ${AUTH_ENABLED ? "Mongo accounts" : "DISABLED (loopback only)"}`);
+  console.log(
+    `  auth      : ${config.local ? "local accounts" : AUTH_ENABLED ? "Mongo accounts" : "DISABLED (loopback only)"}`,
+  );
   console.log(`  site      : ${SITE_ORIGINS.join(", ")}`);
-  console.log(`  corpus db : ${describeDb(config.corpusDatabaseUrl)}`);
-  console.log(`  customer db: ${describeDb(config.customerDatabaseUrl)}`);
-  console.log(`  sops db   : ${describeDb(config.sopsDatabaseUrl)}`);
+  if (config.local) {
+    console.log(`  databases : LOCAL (embedded Postgres) in ${config.localDataDir}`);
+  } else {
+    console.log(`  corpus db : ${describeDb(config.corpusDatabaseUrl)}`);
+    console.log(`  customer db: ${describeDb(config.customerDatabaseUrl)}`);
+    console.log(`  sops db   : ${describeDb(config.sopsDatabaseUrl)}`);
+  }
   console.log(`  uploads   : ${config.uploadDir}`);
 });

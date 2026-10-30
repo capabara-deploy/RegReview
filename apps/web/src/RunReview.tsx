@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type CorpusRule, type Job, type RecordSummary } from "./api";
+import { PreviewPanel } from "./Preview";
 
 /**
  * The "run a review" page.
@@ -72,6 +73,16 @@ function ReplaceIcon() {
       <path d="M8 10V2.7" />
       <path d="M5 5.6 8 2.6l3 3" />
       <path d="M2.8 10.6v1.9c0 .6.4 1 1 1h8.4c.6 0 1-.4 1-1v-1.9" />
+    </svg>
+  );
+}
+
+/** An eye: "look at this document". */
+function PreviewIcon() {
+  return (
+    <svg {...iconProps} aria-hidden="true">
+      <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z" />
+      <circle cx="8" cy="8" r="1.9" />
     </svg>
   );
 }
@@ -177,12 +188,15 @@ function ProgressBar({ value, state }: { value: number; state: string }) {
 }
 
 export function RunReview({
+  project,
   records,
   jobs,
   onStartJob,
   onRefreshRecords,
   onOpenRun,
 }: {
+  /** Uploads go into this project. */
+  project: string;
   records: RecordSummary[];
   jobs: Job[];
   onStartJob: (jobId: string) => void;
@@ -196,6 +210,41 @@ export function RunReview({
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewRecord = records.find((r) => r.recordId === previewId) ?? null;
+  const closePreview = useCallback(() => setPreviewId(null), []);
+
+  /**
+   * Descriptions are written in the background after upload, so a fresh
+   * document arrives without one. While any is missing and the server is still
+   * writing them, re-read the list every few seconds so they fill in on their
+   * own; stop as soon as the server is idle.
+   */
+  const [describing, setDescribing] = useState(false);
+  const missingDescriptions = records.some((r) => !r.description);
+  useEffect(() => {
+    if (!missingDescriptions) {
+      setDescribing(false);
+      return;
+    }
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async (): Promise<void> => {
+      const status = await api.descriptionStatus().catch(() => null);
+      if (!alive || !status) return;
+      setDescribing(status.running);
+      await onRefreshRecords().catch(() => {});
+      if (alive && status.running) timer = setTimeout(() => void tick(), 4000);
+    };
+    timer = setTimeout(() => void tick(), 1500);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [missingDescriptions, onRefreshRecords]);
+  // A coverage warning ("only partly read") must not render in the green
+  // success style — it is the one upload outcome the reviewer has to act on.
+  const [noticeIsWarning, setNoticeIsWarning] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [allRules, setAllRules] = useState<CorpusRule[]>([]);
@@ -430,7 +479,8 @@ export function RunReview({
       setNotice(null);
       setUploading(true);
       try {
-        const result = await api.uploadRecord(file, uploadType);
+        const result = await api.uploadRecord(file, uploadType, project);
+        setNoticeIsWarning(result.warning !== null);
         setNotice(
           result.warning ??
             `Uploaded ${result.filename} — ${result.format}, ${result.blocks} blocks.`,
@@ -444,7 +494,7 @@ export function RunReview({
         if (fileInput.current) fileInput.current.value = "";
       }
     },
-    [uploadType, onRefreshRecords],
+    [uploadType, onRefreshRecords, project],
   );
 
   const onReplace = useCallback(
@@ -454,6 +504,7 @@ export function RunReview({
       setUploading(true);
       try {
         const result = await api.replaceRecord(recordId, file);
+        setNoticeIsWarning(result.warning !== null);
         setNotice(
           result.warning ??
             `Replaced ${result.filename} — ${result.blocks} blocks` +
@@ -494,6 +545,7 @@ export function RunReview({
               `re-run to check it against the new rule set.`,
           );
         }
+        setNoticeIsWarning(false);
         setNotice(parts.join(" "));
         await onRefreshRecords();
       } catch (e) {
@@ -516,6 +568,7 @@ export function RunReview({
         return;
       try {
         const res = await api.deleteRecord(r.recordId);
+        setNoticeIsWarning(false);
         setNotice(
           `Deleted ${label} — ${res.runs} run(s) and ${res.findings} finding(s) removed.`,
         );
@@ -577,9 +630,10 @@ export function RunReview({
   const anyRunning = jobs.some((j) => j.status === "running");
 
   return (
+    <div className="runlayout">
     <div className="runpage">
       {error && <div className="error">{error}</div>}
-      {notice && <div className="notice">{notice}</div>}
+      {notice && <div className={noticeIsWarning ? "notice notice-warn" : "notice"}>{notice}</div>}
 
       {/* 1 — which documents */}
       <section className="rp-section">
@@ -603,7 +657,6 @@ export function RunReview({
             <input
               ref={fileInput}
               type="file"
-              accept=".pdf,.docx,.md,.txt"
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -613,7 +666,6 @@ export function RunReview({
             <input
               ref={replaceInput}
               type="file"
-              accept=".pdf,.docx,.md,.txt"
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -666,7 +718,10 @@ export function RunReview({
                   g.docs.map((r) => {
                     const on = picked.has(r.recordId);
                     return (
-                      <div key={r.recordId} className={`docrow ${on ? "on" : ""}`}>
+                      <div
+                        key={r.recordId}
+                        className={`docrow ${on ? "on" : ""} ${previewId === r.recordId ? "previewing" : ""}`}
+                      >
                         <label className="docrow-main">
                           <input
                             type="checkbox"
@@ -674,6 +729,17 @@ export function RunReview({
                             onChange={() => togglePicked(r.recordId)}
                           />
                           <span className="docrow-name">{r.docId ?? r.filename}</span>
+                          {/* Marked in the list, not only on the findings page,
+                              so a partly-read document is noticed before it is
+                              reviewed, not after. */}
+                          {r.coverageStatus && r.coverageStatus !== "complete" && (
+                            <span
+                              className={`docrow-cov cov-${r.coverageStatus}`}
+                              title="Some of this document could not be read. Open its findings page for what was missed."
+                            >
+                              {r.coverageStatus === "unreadable" ? "not readable" : "partly read"}
+                            </span>
+                          )}
                         </label>
                         {/* Editable, not a badge: the type decides which rules
                             apply, and a document uploaded under the wrong one is
@@ -705,6 +771,14 @@ export function RunReview({
                           {r.runs === 0 ? "Never reviewed" : `${r.runs} run${r.runs === 1 ? "" : "s"}`}
                         </span>
                         <button
+                          className={`docrow-preview ${previewId === r.recordId ? "on" : ""}`}
+                          title="Preview this document"
+                          aria-pressed={previewId === r.recordId}
+                          onClick={() => setPreviewId((id) => (id === r.recordId ? null : r.recordId))}
+                        >
+                          <PreviewIcon />
+                        </button>
+                        <button
                           className="docrow-replace"
                           title="Replace this document's file, keeping its place and history slot"
                           disabled={uploading}
@@ -722,6 +796,15 @@ export function RunReview({
                         >
                           <TrashIcon />
                         </button>
+                        {/* What the document is, so a reviewer can choose without opening it. */}
+                        {r.description ? (
+                          <p className="docrow-desc" title={r.description.summary}>
+                            <span className="docrow-desc-label">{r.description.label}</span>{" "}
+                            {r.description.summary}
+                          </p>
+                        ) : (
+                          describing && <p className="docrow-desc muted">Describing…</p>
+                        )}
                       </div>
                     );
                   })}
@@ -1113,6 +1196,10 @@ export function RunReview({
           ))}
         </section>
       )}
+    </div>
+    {/* Docked beside the list rather than over it, so picking documents and
+        looking at them happen on one screen. */}
+    {previewRecord && <PreviewPanel record={previewRecord} onClose={closePreview} />}
     </div>
   );
 }

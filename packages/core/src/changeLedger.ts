@@ -121,6 +121,8 @@ export interface Submission {
 
 export interface Baseline {
   baselineId: string;
+  /** The project (device) this baseline's ledger belongs to. */
+  projectId: string;
   device: string;
   /** The 510(k)/clearance number that is the "original device" comparator. */
   clearanceId: string;

@@ -159,10 +159,13 @@ function LedgerSkeleton() {
 }
 
 export function ChangeLedger({
+  project,
   target,
   onNavigate,
   onAuthError,
 }: {
+  /** The selected project; the ledger shows only its baselines and documents. */
+  project: string;
   /** Change id from the address bar, so a link opens that change's detail. */
   target: string | null;
   onNavigate: (page: Page, target?: string | null) => void;
@@ -199,7 +202,7 @@ export function ChangeLedger({
 
   const refreshBaselines = useCallback(async () => {
     try {
-      const list = await api.baselines();
+      const list = await api.baselines(project);
       setBaselines(list);
       // Prefer a baseline nothing has superseded — that is the configuration
       // changes are currently accumulating against.
@@ -209,13 +212,13 @@ export function ChangeLedger({
     } finally {
       setLoaded(true);
     }
-  }, [fail]);
+  }, [fail, project]);
 
   useEffect(() => {
     void refreshBaselines();
     // Records are the documents a change can be marked documented against.
-    api.records().then(setRecords).catch(() => setRecords([]));
-  }, [refreshBaselines]);
+    api.records(project).then(setRecords).catch(() => setRecords([]));
+  }, [refreshBaselines, project]);
 
   const loadAssessment = useCallback(
     async (baselineId: string) => {
@@ -261,7 +264,7 @@ export function ChangeLedger({
     return (
       <div className="ledger">
         {error && <div className="error">{error}</div>}
-        <CreateBaseline onCreated={refreshBaselines} onError={fail} />
+        <CreateBaseline project={project} onCreated={refreshBaselines} onError={fail} />
       </div>
     );
   }
@@ -1101,9 +1104,11 @@ function SubmissionRow({
 }
 
 function CreateBaseline({
+  project,
   onCreated,
   onError,
 }: {
+  project: string;
   onCreated: () => void;
   onError: (e: unknown) => void;
 }) {
@@ -1115,7 +1120,7 @@ function CreateBaseline({
 
   const submit = async () => {
     try {
-      await api.createBaseline({
+      await api.createBaseline(project, {
         device,
         clearanceId,
         ...(clearedAt ? { clearedAt } : {}),

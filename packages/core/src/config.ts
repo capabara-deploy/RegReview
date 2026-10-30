@@ -84,7 +84,18 @@ function requiredDatabaseUrl(envVar: string): string {
   return value;
 }
 
+/**
+ * `REGREVIEW_LOCAL=1`: run with no online database at all. The three Postgres
+ * databases become embedded PGlite instances on disk under `localDataDir`, and
+ * the server keeps reviewer accounts there too instead of in MongoDB. The Neon
+ * and Mongo variables are ignored while this is set, so a dev machine can keep
+ * them in .env and still never write to production by accident.
+ */
+const LOCAL = process.env["REGREVIEW_LOCAL"] === "1";
+
 export const config = {
+  local: LOCAL,
+  localDataDir: configuredPath("REGREVIEW_LOCAL_DATA_DIR", "./data/local"),
   model: process.env["REGREVIEW_MODEL"] ?? DEFAULT_MODEL,
   effort: process.env["REGREVIEW_EFFORT"] ?? DEFAULT_EFFORT,
   // Uploaded files (original bytes, not extracted text) stay on local disk

@@ -1,4 +1,5 @@
 import type { Collection, Db } from "mongodb";
+import { accountsDb, LOCAL_ACCOUNTS } from "./localAccounts.js";
 
 /**
  * Per-user hourly cap on documents sent to the model.
@@ -71,6 +72,24 @@ export async function consumeQuota(username: string, count: number): Promise<Quo
   const key = `${username}:${bucket}`;
   const resetAt = nextHourBoundary().toISOString();
 
+  if (LOCAL_ACCOUNTS) {
+    // The upsert-and-return is one statement, so it is as atomic as Mongo's findOneAndUpdate.
+    const row = await accountsDb()
+      .prepare(
+        `INSERT INTO usage_counters (key, username, hour_bucket, count, expires_at)
+           VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (key) DO UPDATE SET count = usage_counters.count + excluded.count
+         RETURNING count`,
+      )
+      .get<{ count: number }>(key, username, bucket, count, new Date(Date.now() + 2 * 60 * 60 * 1000));
+    const newCount = row?.count ?? count;
+    if (newCount > REVIEWS_PER_HOUR) {
+      await accountsDb().prepare(`UPDATE usage_counters SET count = count - ? WHERE key = ?`).run(count, key);
+      return { ok: false, limit: REVIEWS_PER_HOUR, remaining: 0, resetAt };
+    }
+    return { ok: true, limit: REVIEWS_PER_HOUR, remaining: REVIEWS_PER_HOUR - newCount, resetAt };
+  }
+
   const after = await usage().findOneAndUpdate(
     { _id: key },
     {
@@ -97,7 +116,10 @@ export async function consumeQuota(username: string, count: number): Promise<Quo
 /** How much of the current hour's quota is left, without spending any of it. */
 export async function peekQuota(username: string): Promise<QuotaResult> {
   const bucket = currentHourBucket();
-  const doc = await usage().findOne({ _id: `${username}:${bucket}` });
+  const key = `${username}:${bucket}`;
+  const doc = LOCAL_ACCOUNTS
+    ? await accountsDb().prepare(`SELECT count FROM usage_counters WHERE key = ?`).get<{ count: number }>(key)
+    : await usage().findOne({ _id: key });
   const used = doc?.count ?? 0;
   return {
     ok: true,
@@ -110,5 +132,9 @@ export async function peekQuota(username: string): Promise<QuotaResult> {
 /** Admin override: clear a user's usage for the current hour. */
 export async function resetQuota(username: string): Promise<void> {
   const bucket = currentHourBucket();
+  if (LOCAL_ACCOUNTS) {
+    await accountsDb().prepare(`DELETE FROM usage_counters WHERE key = ?`).run(`${username}:${bucket}`);
+    return;
+  }
   await usage().deleteOne({ _id: `${username}:${bucket}` });
 }

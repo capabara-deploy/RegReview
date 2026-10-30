@@ -37,7 +37,17 @@ export interface PdfExtraction {
   pageCount: number;
   /** True when the PDF has pages but essentially no extractable text. */
   likelyScanned: boolean;
+  /**
+   * 1-based pages with (almost) no text layer — scanned pages, or pages that
+   * are one big image. Recorded per page because the common real case is not a
+   * fully scanned document but a typed one with a scanned signature page or
+   * attachment, which reads as mostly fine and is exactly the gap that hides.
+   */
+  emptyPages: number[];
 }
+
+/** Fewer non-whitespace characters than this on a page reads as image-only. */
+const EMPTY_PAGE_CHARS = 20;
 
 /**
  * Vertical tolerance, as a fraction of line height, for treating two items as
@@ -143,6 +153,7 @@ export async function extractPdf(
   let cursor = 0;
   let ordinal = 0;
   let heading: string | null = null;
+  const emptyPages: number[] = [];
 
   for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
     const page = await doc.getPage(pageNumber);
@@ -151,6 +162,9 @@ export async function extractPdf(
       (i): i is TextItem =>
         typeof i === "object" && i !== null && "str" in i && "transform" in i,
     );
+
+    const pageChars = items.reduce((n, i) => n + i.str.replace(/s/g, "").length, 0);
+    if (pageChars < EMPTY_PAGE_CHARS) emptyPages.push(pageNumber);
 
     const lines = groupIntoLines(items);
     if (lines.length === 0) continue;
@@ -230,5 +244,6 @@ export async function extractPdf(
     blocks,
     pageCount: doc.numPages,
     likelyScanned,
+    emptyPages,
   };
 }

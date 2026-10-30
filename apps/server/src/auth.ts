@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { MongoClient, type Collection, type Db } from "mongodb";
+import { accountsDb, LOCAL_ACCOUNTS, migrateLocalAccounts } from "./localAccounts.js";
 
 /**
  * Reviewer accounts and sessions.
@@ -29,7 +30,9 @@ export interface SessionDoc {
 const MONGODB_URI = process.env["MONGODB_URI"] ?? "";
 const MONGODB_DB = process.env["MONGODB_DB"] ?? "regreview";
 
-export const AUTH_ENABLED = MONGODB_URI !== "";
+// Local mode always has accounts (kept on disk, see localAccounts.ts), so the
+// sign-in flow being tested locally is the one that ships.
+export const AUTH_ENABLED = LOCAL_ACCOUNTS || MONGODB_URI !== "";
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days, matches the session cookie's Max-Age.
 
@@ -63,18 +66,34 @@ async function sessions(): Promise<Collection<SessionDoc>> {
  */
 export async function ensureAuthIndexes(): Promise<void> {
   if (!AUTH_ENABLED) return;
+  if (LOCAL_ACCOUNTS) return migrateLocalAccounts();
   await (await users()).createIndex({ username: 1 }, { unique: true });
   await (await sessions()).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 }
 
 export async function createUser(username: string, password: string): Promise<void> {
   const passwordHash = await bcrypt.hash(password, 12);
+  if (LOCAL_ACCOUNTS) {
+    const inserted = await accountsDb()
+      .prepare(
+        `INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)
+           ON CONFLICT (username) DO NOTHING`,
+      )
+      .run(username, passwordHash, new Date().toISOString());
+    // Same message shape as Mongo's duplicate-key error, which createUser's CLI matches on.
+    if (inserted.changes === 0) throw new Error(`E11000 duplicate username "${username}"`);
+    return;
+  }
   await (await users()).insertOne({ username, passwordHash, createdAt: new Date().toISOString() });
 }
 
 /** Verify a login attempt. Returns the username on success, null otherwise. */
 export async function verifyLogin(username: string, password: string): Promise<string | null> {
-  const user = await (await users()).findOne({ username });
+  const user = LOCAL_ACCOUNTS
+    ? await accountsDb()
+        .prepare(`SELECT username, password_hash AS "passwordHash" FROM users WHERE username = ?`)
+        .get<Pick<UserDoc, "username" | "passwordHash">>(username)
+    : await (await users()).findOne({ username });
   if (!user) {
     // Hash something anyway so a nonexistent username doesn't return faster
     // than a wrong password — that timing gap is enough to enumerate accounts.
@@ -88,6 +107,12 @@ export async function verifyLogin(username: string, password: string): Promise<s
 /** Start a session and return its opaque token — the value to put in the cookie. */
 export async function createSession(username: string): Promise<string> {
   const token = randomBytes(32).toString("hex");
+  if (LOCAL_ACCOUNTS) {
+    await accountsDb()
+      .prepare(`INSERT INTO sessions (token, username, created_at, expires_at) VALUES (?, ?, ?, ?)`)
+      .run(token, username, new Date().toISOString(), new Date(Date.now() + SESSION_TTL_MS));
+    return token;
+  }
   await (await sessions()).insertOne({
     _id: token,
     username,
@@ -99,10 +124,20 @@ export async function createSession(username: string): Promise<string> {
 
 /** The logged-in username for a session token, or null if it's missing/expired. */
 export async function resolveSession(token: string): Promise<string | null> {
+  if (LOCAL_ACCOUNTS) {
+    const row = await accountsDb()
+      .prepare(`SELECT username FROM sessions WHERE token = ? AND expires_at > now()`)
+      .get<{ username: string }>(token);
+    return row?.username ?? null;
+  }
   const session = await (await sessions()).findOne({ _id: token, expiresAt: { $gt: new Date() } });
   return session?.username ?? null;
 }
 
 export async function deleteSession(token: string): Promise<void> {
+  if (LOCAL_ACCOUNTS) {
+    await accountsDb().prepare(`DELETE FROM sessions WHERE token = ?`).run(token);
+    return;
+  }
   await (await sessions()).deleteOne({ _id: token });
 }

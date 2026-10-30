@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getCustomerDb, type Db } from "./db/index.js";
+import { DEFAULT_PROJECT_ID } from "./projects.js";
 import {
   ChangeType,
   Determination,
@@ -34,6 +35,7 @@ function rowToBaseline(r: Record<string, unknown>): Baseline {
   }
   return {
     baselineId: r["baseline_id"] as string,
+    projectId: (r["project_id"] as string | null) ?? DEFAULT_PROJECT_ID,
     device: r["device"] as string,
     clearanceId: r["clearance_id"] as string,
     clearedAt: (r["cleared_at"] as string | null) ?? null,
@@ -105,11 +107,13 @@ export async function createBaseline(
     note?: string | undefined;
     threshold?: number | undefined;
     thresholdSource?: string | undefined;
+    projectId?: string | undefined;
   },
   db: Db = getCustomerDb(),
 ): Promise<Baseline> {
   const baseline: Baseline = {
     baselineId: `bl-${randomUUID().slice(0, 12)}`,
+    projectId: args.projectId ?? DEFAULT_PROJECT_ID,
     device: args.device,
     clearanceId: args.clearanceId,
     clearedAt: args.clearedAt ?? null,
@@ -127,8 +131,8 @@ export async function createBaseline(
     .prepare(
       `INSERT INTO baselines
          (baseline_id, device, clearance_id, cleared_at, configuration, note,
-          threshold, threshold_source, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          threshold, threshold_source, created_at, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       baseline.baselineId,
@@ -140,6 +144,7 @@ export async function createBaseline(
       baseline.threshold,
       baseline.thresholdSource,
       baseline.createdAt,
+      baseline.projectId,
     );
   return baseline;
 }
@@ -164,10 +169,13 @@ export async function setThreshold(
   return getBaseline(baselineId, db);
 }
 
-export async function listBaselines(db: Db = getCustomerDb()): Promise<Baseline[]> {
-  const rows = (await db
-    .prepare(`SELECT * FROM baselines ORDER BY created_at DESC`)
-    .all()) as Record<string, unknown>[];
+/** Baselines, newest first — every project's, or one project's when `projectId` is given. */
+export async function listBaselines(db: Db = getCustomerDb(), projectId?: string): Promise<Baseline[]> {
+  const rows = (
+    projectId
+      ? await db.prepare(`SELECT * FROM baselines WHERE project_id = ? ORDER BY created_at DESC`).all(projectId)
+      : await db.prepare(`SELECT * FROM baselines ORDER BY created_at DESC`).all()
+  ) as Record<string, unknown>[];
   return rows.map(rowToBaseline);
 }
 
@@ -568,6 +576,8 @@ export async function clearSubmission(
   const decisionAt = args.decisionAt ?? new Date().toISOString();
   const successor: Baseline = {
     baselineId: `bl-${randomUUID().slice(0, 12)}`,
+    // A clearance moves the device forward; it stays the same project.
+    projectId: prior.projectId,
     device: prior.device,
     clearanceId: args.clearanceId,
     clearedAt: decisionAt.slice(0, 10),
@@ -596,8 +606,8 @@ export async function clearSubmission(
       .prepare(
         `INSERT INTO baselines
            (baseline_id, device, clearance_id, cleared_at, configuration, note,
-            threshold, threshold_source, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            threshold, threshold_source, created_at, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         successor.baselineId,
@@ -609,6 +619,7 @@ export async function clearSubmission(
         successor.threshold,
         successor.thresholdSource,
         successor.createdAt,
+        successor.projectId,
       );
     await db
       .prepare(`UPDATE baselines SET superseded_by = ? WHERE baseline_id = ?`)

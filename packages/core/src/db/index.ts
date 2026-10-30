@@ -1,5 +1,6 @@
+import { join } from "node:path";
 import { config } from "../config.js";
-import { PgDb } from "./pgDb.js";
+import { PgDb, type PgTarget } from "./pgDb.js";
 
 export type Db = PgDb;
 
@@ -26,24 +27,50 @@ let corpus: PgDb | undefined;
 let customer: PgDb | undefined;
 let sops: PgDb | undefined;
 
+/**
+ * In local mode each database is its own PGlite directory, so the
+ * sensitivity split survives: customer content still never shares storage
+ * with the corpus. The url getter is only touched outside local mode, so a
+ * local run never needs (or reads) a Neon connection string.
+ */
+function target(name: string, url: () => string): PgTarget {
+  return config.local
+    ? { kind: "local", dataDir: join(config.localDataDir, name) }
+    : { kind: "url", connectionString: url() };
+}
+
 export function getCorpusDb(): PgDb {
-  if (!corpus) corpus = new PgDb(config.corpusDatabaseUrl);
+  if (!corpus) corpus = new PgDb(target("corpus", () => config.corpusDatabaseUrl));
   return corpus;
 }
 
 export function getCustomerDb(): PgDb {
-  if (!customer) customer = new PgDb(config.customerDatabaseUrl);
+  if (!customer) customer = new PgDb(target("customer", () => config.customerDatabaseUrl));
   return customer;
 }
 
 export function getSopsDb(): PgDb {
-  if (!sops) sops = new PgDb(config.sopsDatabaseUrl);
+  if (!sops) sops = new PgDb(target("sops", () => config.sopsDatabaseUrl));
   return sops;
 }
 
+let accounts: PgDb | undefined;
+
+/**
+ * Local mode only: reviewer accounts, sessions and the hourly quota, which
+ * MongoDB holds in a deployment. Kept in its own directory so it never mixes
+ * with customer content. Opening this outside local mode is a bug.
+ */
+export function getLocalAccountsDb(): PgDb {
+  if (!config.local) throw new Error("getLocalAccountsDb() is only available with REGREVIEW_LOCAL=1");
+  if (!accounts) accounts = new PgDb({ kind: "local", dataDir: join(config.localDataDir, "accounts") });
+  return accounts;
+}
+
 export async function closeAllDbs(): Promise<void> {
-  await Promise.all([corpus?.end(), customer?.end(), sops?.end()]);
+  await Promise.all([corpus?.end(), customer?.end(), sops?.end(), accounts?.end()]);
   corpus = undefined;
   customer = undefined;
   sops = undefined;
+  accounts = undefined;
 }

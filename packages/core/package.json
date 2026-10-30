@@ -14,7 +14,10 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "@electric-sql/pglite": "^0.5.11",
+    "fflate": "^0.8.3",
     "mammoth": "^1.9.0",
+    "marked": "^15.0.12",
     "pdfjs-dist": "^4.9.155",
     "pg": "^8.23.0",
     "zod": "^3.24.1"

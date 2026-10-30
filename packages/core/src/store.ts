@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_PROJECT_ID } from "./projects.js";
 import { CORPUS_VERSION, PROMPT_VERSION } from "./config.js";
 import { getCorpusDb, getCustomerDb, getSopsDb, type Db } from "./db/index.js";
 import type {
@@ -127,8 +128,8 @@ export async function saveRecord(
       .prepare(
         `INSERT INTO records
            (record_id, filename, stored_path, sha256, record_type, doc_id, revision,
-            normalized_text, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            normalized_text, created_at, format, coverage, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(record_id) DO UPDATE SET
            filename        = excluded.filename,
            stored_path     = excluded.stored_path,
@@ -136,7 +137,14 @@ export async function saveRecord(
            record_type     = excluded.record_type,
            doc_id          = excluded.doc_id,
            revision        = excluded.revision,
-           normalized_text = excluded.normalized_text`,
+           normalized_text = excluded.normalized_text,
+           -- Callers that don't extract (the eval harness builds records from
+           -- text) pass no coverage; keep what extraction recorded rather than
+           -- erase it.
+           format          = COALESCE(excluded.format, records.format),
+           coverage        = COALESCE(excluded.coverage, records.coverage)`,
+        // project_id is deliberately absent from the update: a record keeps
+        // the project it was created in, even when its file is replaced.
       )
       .run(
         record.recordId,
@@ -148,6 +156,9 @@ export async function saveRecord(
         record.revision,
         record.normalizedText,
         record.createdAt,
+        record.coverage?.format ?? null,
+        record.coverage ? JSON.stringify(record.coverage) : null,
+        record.projectId ?? DEFAULT_PROJECT_ID,
       );
 
     if (!unchanged) {
@@ -159,8 +170,9 @@ export async function saveRecord(
         await db
           .prepare(
             `INSERT INTO blocks
-               (block_id, record_id, ordinal, text, char_start, char_end, page, bbox, heading)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (block_id, record_id, ordinal, text, char_start, char_end, page, bbox, heading,
+                anchor, cells)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             b.blockId,
@@ -172,6 +184,8 @@ export async function saveRecord(
             b.page,
             b.bbox ? JSON.stringify(b.bbox) : null,
             b.heading,
+            b.anchor ?? null,
+            b.cells ? JSON.stringify(b.cells) : null,
           );
       }
     }

@@ -3330,3 +3330,533 @@ button.secondary {
 .cross-targets {
   margin-top: 6px;
 }
+
+/* ---------- extraction coverage ----------
+   What was and wasn't read from a document. Deliberately not a severity colour
+   and labelled in words: a coverage gap is about what the tool saw, not a
+   defect in the document, and must not read as a finding. */
+
+.notice-warn {
+  background: #f4efe3;
+  border-bottom-color: #c9b48a;
+  color: #5a4520;
+}
+
+.coverage {
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  font-size: 12.5px;
+  background: var(--surface);
+}
+
+.coverage.cov-complete {
+  border-left-color: #9fb59f;
+}
+
+.coverage.cov-partial,
+.coverage.cov-unknown {
+  background: #f4efe3;
+  border-left-color: #8a6d3b;
+}
+
+.coverage.cov-unreadable {
+  background: #f4efe3;
+  border-left-color: #5a4520;
+  border-left-width: 8px;
+}
+
+.cov-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.cov-label {
+  font-weight: 600;
+}
+
+.cov-sub {
+  color: var(--muted);
+}
+
+.cov-toggle {
+  font-size: 12px;
+}
+
+.cov-list {
+  margin: 4px 0 2px;
+  padding-left: 18px;
+}
+
+.cov-list li {
+  margin: 2px 0;
+}
+
+.cov-notes {
+  color: var(--muted);
+}
+
+.cov-where,
+.list-loc,
+.panel-loc {
+  font-size: 11.5px;
+  background: #ecebe4;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.list-loc {
+  margin-left: 6px;
+}
+
+.docrow-cov {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px dashed #8a6d3b;
+  color: #5a4520;
+  white-space: nowrap;
+}
+
+.docrow-cov.cov-unreadable {
+  border-style: solid;
+}
+
+/* ---------- document previewer (run page) ----------
+   Docked to the right of the document list, not floating over it, so choosing
+   documents and looking at them happen on one screen. */
+
+.runlayout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.runlayout > .runpage {
+  min-width: 0;
+}
+
+.docrow-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  flex: none;
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+.docrow-preview svg {
+  display: block;
+}
+
+.docrow:hover .docrow-preview,
+.docrow-preview:focus-visible,
+.docrow-preview.on {
+  opacity: 1;
+}
+
+.docrow-preview:hover,
+.docrow-preview.on {
+  color: var(--accent);
+  background: var(--low-bg);
+}
+
+.docrow.previewing {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.preview-panel {
+  flex: none;
+  width: min(52vw, 880px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+}
+
+.pv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pv-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.pv-title strong,
+.pv-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #e9e9e4;
+}
+
+.pv-pad {
+  padding: 12px 16px;
+  margin: 0;
+}
+
+.pv-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #e9e9e4;
+}
+
+.pv-text {
+  flex: 1;
+  overflow: auto;
+  margin: 16px;
+  padding: 32px 40px;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  font: 12.5px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pv-sheets {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.pv-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: #f1f1ec;
+  overflow-x: auto;
+}
+
+.pv-tab {
+  padding: 4px 12px;
+  font-size: 12.5px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pv-tab.on {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  margin-bottom: -1px;
+}
+
+.pv-tab.hidden-sheet {
+  font-style: italic;
+}
+
+.pv-tag {
+  margin-left: 6px;
+  font-size: 10.5px;
+  font-style: normal;
+  padding: 0 4px;
+  border: 1px dashed #8a6d3b;
+  border-radius: 3px;
+  color: #5a4520;
+}
+
+.pv-gridwrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.pv-grid {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.pv-grid th,
+.pv-grid td {
+  border: 1px solid #dcdcd5;
+  padding: 3px 7px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.pv-grid td {
+  max-width: 320px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pv-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f1ec;
+  color: var(--muted);
+  font-weight: 500;
+  text-align: center;
+}
+
+.pv-grid tbody th {
+  position: sticky;
+  left: 0;
+  background: #f1f1ec;
+  color: var(--muted);
+  font-weight: 500;
+  text-align: right;
+}
+
+.pv-grid .pv-corner {
+  left: 0;
+  z-index: 2;
+}
+
+.pv-formula {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: #5a4520;
+  background: #f4efe3;
+}
+
+.pv-grid td.pv-formula {
+  white-space: nowrap;
+}
+
+/* Too narrow to dock beside the list without crushing it: overlay instead.
+   Escape or the close button returns to the list. */
+.runlayout {
+  position: relative;
+}
+
+@media (max-width: 1100px) {
+  .preview-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    width: min(94vw, 880px);
+    box-shadow: -6px 0 18px rgba(0, 0, 0, 0.12);
+  }
+}
+
+/* PDF pages, drawn by pdf.js onto the same grey desk as the HTML pages. */
+.pv-pages {
+  flex: 1;
+  overflow: auto;
+  background: #e9e9e4;
+}
+
+.pv-pagestack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.pv-page {
+  display: block;
+  width: min(100%, 780px);
+  height: auto;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* ---------- plain-language summaries ----------
+   Neither the description nor the review summary is a finding, so neither uses
+   severity colours for itself; only the links back to findings carry them. */
+
+.docrow-desc {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: 26px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.docrow-desc-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pv-desc {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: normal !important;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.run-summary {
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.rs-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.rs-about {
+  flex: 1;
+  min-width: 0;
+}
+
+.rs-kind {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.rs-desc {
+  color: var(--muted);
+}
+
+.rs-toggle {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rs-body {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #f6f6f2;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.rs-purpose {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+
+.rs-verdict {
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+/* Distinguished by border style and the words, not by severity colour. */
+.rs-verdict.v-supports {
+  border-color: #6f8f6f;
+}
+.rs-verdict.v-partly {
+  border-color: #8a6d3b;
+  border-style: dashed;
+}
+.rs-verdict.v-does_not {
+  border-color: #5a4520;
+  border-width: 2px;
+}
+.rs-verdict.v-cannot_tell {
+  border-style: dotted;
+  color: var(--muted);
+}
+
+.rs-reason {
+  color: var(--text);
+}
+
+.rs-issues {
+  margin: 0 0 6px;
+  padding-left: 20px;
+}
+
+.rs-issues li {
+  margin: 4px 0;
+  line-height: 1.45;
+}
+
+.rs-why {
+  color: var(--text);
+}
+
+.rs-refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 6px;
+  vertical-align: baseline;
+}
+
+.rs-ref {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.rs-ref.sev-high {
+  border-color: var(--high-line);
+}
+.rs-ref.sev-medium {
+  border-color: var(--med-line);
+}
+.rs-ref.sev-low {
+  border-color: var(--low-line);
+}
+
+.rs-note {
+  margin: 0;
+}
+
+.rs-caveat {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.project-new input {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--accent);
+  width: 200px;
+  background: var(--surface);
+}

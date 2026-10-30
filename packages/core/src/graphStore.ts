@@ -53,17 +53,22 @@ function daysSince(iso: string | null, now: number): number | null {
 }
 
 /** The baseline changes are currently accumulating against. */
-async function currentBaseline(db: Db): Promise<Baseline | null> {
-  const all = await listBaselines(db);
+async function currentBaseline(db: Db, projectId?: string): Promise<Baseline | null> {
+  const all = await listBaselines(db, projectId);
   if (all.length === 0) return null;
   const live = all.filter((b) => !b.supersededBy);
   return (live[0] ?? all[0]) ?? null;
 }
 
-export async function loadGraph(db: Db = getCustomerDb()): Promise<Graph> {
-  const recs = (await db
-    .prepare(`SELECT record_id, filename, record_type, doc_id, normalized_text FROM records`)
-    .all()) as {
+/** The graph of every project's documents, or of one project's when `projectId` is given. */
+export async function loadGraph(db: Db = getCustomerDb(), projectId?: string): Promise<Graph> {
+  const recs = (
+    projectId
+      ? await db
+          .prepare(`SELECT record_id, filename, record_type, doc_id, normalized_text FROM records WHERE project_id = ?`)
+          .all(projectId)
+      : await db.prepare(`SELECT record_id, filename, record_type, doc_id, normalized_text FROM records`).all()
+  ) as {
     record_id: string;
     filename: string;
     record_type: string;
@@ -163,7 +168,7 @@ export async function loadGraph(db: Db = getCustomerDb()): Promise<Graph> {
 
   // --- changes, the documents they owe, and the submissions carrying them ---
 
-  const baseline = await currentBaseline(db);
+  const baseline = await currentBaseline(db, projectId);
   let risk: GraphRisk | null = null;
 
   if (baseline) {

@@ -193,6 +193,63 @@ export interface Block {
   bbox: [number, number, number, number] | null;
   /** Heading path, e.g. ["5. Root Cause Analysis", "5.2 Investigation"]. */
   heading: string | null;
+  /**
+   * Where the block sits in its source when that is not a page: a spreadsheet
+   * row as an A1 range, e.g. "FMEA!A14:G14". Null for prose formats.
+   */
+  anchor?: string | null;
+  /**
+   * Spreadsheet only: each cell's value as an offset range into the record's
+   * normalizedText, so a finding's quote resolves to the exact cell ("FMEA!F14")
+   * an investigator would be shown, not just to the row.
+   */
+  cells?: CellSpan[] | null;
+}
+
+export interface CellSpan {
+  /** A1 reference with sheet, e.g. "FMEA!F14". */
+  ref: string;
+  charStart: number;
+  charEnd: number;
+}
+
+/**
+ * What extraction actually read from a document, and what it could not.
+ *
+ * Exists because the most dangerous output this product can produce is a clean
+ * review of a document it never fully read: a scanned page, an image of a table,
+ * a formula with no saved value. Those look exactly like "nothing wrong here"
+ * unless the gap is recorded and shown next to the findings. FDA rejected "the
+ * AI never told us" as a defence (Purolea, WL 320-26-58), so silence must never
+ * stand in for coverage.
+ */
+export interface Coverage {
+  /** The format extraction used — decided from the file's bytes, not its name. */
+  format: string;
+  /** The extension the file arrived with, when it disagrees with `format`. */
+  declaredExtension: string | null;
+  units: { kind: "page" | "sheet" | "document"; total: number; read: number };
+  characters: number;
+  blocks: number;
+  /**
+   * complete: nothing known to be unread. partial: at least one gap.
+   * unreadable: essentially no text — any review of it would be empty.
+   */
+  status: "complete" | "partial" | "unreadable";
+  gaps: CoverageGap[];
+}
+
+export interface CoverageGap {
+  /** Stable machine kind, e.g. "image_only_pages", "hidden_sheet". */
+  kind: string;
+  /**
+   * gap: content exists that the review did not see. note: everything was
+   * read, but how it was read matters (a hidden sheet, Excel's cached values).
+   */
+  level: "gap" | "note";
+  /** Where, in the document's own terms: "pages 7–9", "FMEA!F12, F15". */
+  where: string | null;
+  detail: string;
 }
 
 /**
@@ -210,6 +267,10 @@ export interface RecordDoc {
   revision: string | null;
   normalizedText: string;
   createdAt: string;
+  /** Set by extraction; null for records saved before coverage existed. */
+  coverage?: Coverage | null;
+  /** The project the record belongs to; DEFAULT_PROJECT_ID when unset. Fixed once saved. */
+  projectId?: string;
 }
 
 /**
