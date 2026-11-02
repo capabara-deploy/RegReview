@@ -19,7 +19,7 @@ static_sites:
   - name: web
     github:
       repo: HowIsThatRude/RegReview
-      branch: korea
+      branch: cory-november-demo
       deploy_on_push: true
     # Root, not apps/web: npm workspaces need the lockfile at the repo root
     # to resolve, so the install has to happen there even though only the

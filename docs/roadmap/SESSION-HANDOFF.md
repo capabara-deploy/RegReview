@@ -274,7 +274,7 @@ npm run dev:server / dev:web  # run the app locally (see §6 for the DNS preload
 
 - **Site (`apps/web`)** → DigitalOcean App Platform, custom domain **demo.capabara.io**
   (also `regreview-j2s5i.ondigitalocean.app`). Spec at `.do/app.yaml` (`deploy_on_push`
-  wired to branch `korea`). **GitHub auto-deploy has been broken since the repo moved
+  wired to branch `cory-november-demo`). **GitHub auto-deploy has been broken since the repo moved
   to the `capabara-deploy` org** — App Platform stopped building; recent commits are
   pushed to GitHub but not live. Fix is in the DO console (Settings → Source, reconnect
   the org).
