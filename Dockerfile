@@ -29,7 +29,11 @@ COPY packages/corpus/package.json    packages/corpus/
 COPY packages/eval/package.json      packages/eval/
 COPY apps/server/package.json        apps/server/
 COPY apps/web/package.json           apps/web/
-RUN npm ci
+# --ignore-scripts: this stage only runs tsc, which needs no native addon. The
+# one that would build here is better-sqlite3 (a devDependency, used only by
+# the one-off archiveSqlite CLI), and the slim image has no Python/toolchain
+# for node-gyp to compile it with when no prebuilt binary matches this Node.
+RUN npm ci --ignore-scripts
 
 COPY . .
 
