@@ -59,6 +59,10 @@ COPY --from=build /app/apps/server/dist    apps/server/dist
 # migrates, finds no sample files, and the conformance pass runs ruleless until
 # someone uploads a procedure — which looks exactly like a clean review.
 COPY --from=build /app/packages/core/samples packages/core/samples
+# Also not build output: the *Schema.sql files migrate.ts runs on every boot.
+# Its fallback lookup (../../src/db) points at a src/ tree this image does not
+# ship, so without this copy the server dies at its first migrate.
+COPY --from=build /app/packages/core/src/db/*.sql packages/core/dist/db/
 COPY docker-entrypoint.sh                  ./
 
 # The rule corpus (packages/core/src/db/corpusSchema.sql and friends) lives in

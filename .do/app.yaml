@@ -30,5 +30,7 @@ static_sites:
     envs:
       - key: VITE_API_URL
         scope: BUILD_TIME
-        # TODO: fill in once the API Droplet exists — e.g. https://api.regreview.example.com
-        value: "REPLACE_WITH_DROPLET_API_URL"
+        # The Droplet's Caddy container terminates TLS for this hostname and
+        # proxies to the API on :8787. Must be https: the site is served over
+        # https, and browsers block an http API call from it (mixed content).
+        value: "https://167.71.105.204.sslip.io"
